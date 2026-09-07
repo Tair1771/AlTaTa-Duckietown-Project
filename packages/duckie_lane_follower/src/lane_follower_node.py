@@ -180,6 +180,32 @@ class LaneFollowerNode(DTROS):
         self._obstacle_clear_since = None
         self._obstacle_box = None
         self._lane_limits = None
+        # Experimental passing is opt-in after physical calibration on this bot.
+        self.duck_lower, self.duck_upper = self.color_range("duck", [15, 90, 70], [40, 255, 255])
+        self.avoidance_enabled = rospy.get_param("~avoidance_enabled", False)
+        self.avoidance_calibrated = rospy.get_param("~avoidance_calibrated", False)
+        self.avoidance_speed = self.number_param("~avoidance_speed", 0.04)
+        self.avoidance_timeout = self.number_param("~avoidance_timeout", 12.0)
+        self.avoidance_clear_seconds = self.number_param("~avoidance_clear_seconds", 1.0)
+        if type(self.avoidance_enabled) is not bool or type(self.avoidance_calibrated) is not bool:
+            raise ValueError("Avoidance flags must be booleans")
+        if self.avoidance_enabled and (not self.avoidance_calibrated or not self.obstacle_enabled):
+            raise ValueError("Avoidance requires obstacle detection and physical calibration")
+        if not (0 < self.avoidance_speed <= min(self.base_speed, self.max_speed)
+                and 0.5 <= self.avoidance_clear_seconds <= 5
+                and self.avoidance_clear_seconds + 1 < self.avoidance_timeout <= 30):
+            raise ValueError("Invalid avoidance speed, clearance duration or timeout")
+        self.avoidance_state = "idle"
+        self._avoidance_started = None
+        self._avoidance_stable_since = None
+        self._avoidance_clear_since = None
+        self._duck_passed_edge = False
+        self._avoidance_clear_progress = 0.0
+        self._avoidance_updated = None
+        self._duck_boxes = []
+        self._road_geometry = None
+        self._avoidance_reason = ("Waiting for a suitable passing scene" if self.avoidance_enabled
+                                  else "Passing disabled until calibrated")
         self._seen_commands = {}
         self._fault_reason = None
         # Reject settings that could invalidate timing or the wheel-command gate.
@@ -322,6 +348,11 @@ class LaneFollowerNode(DTROS):
         upper_white = self.white_upper
         white_mask = cv2.inRange(hsv, lower_white, upper_white)
 
+        for x, y, bw, bh in self._duck_boxes:
+            a, b = max(0, y - roi_y0), min(roi_y1 - roi_y0, y + bh - roi_y0)
+            if b > a:
+                yellow_mask[a:b, x:x+bw] = 0
+
         # In the right lane, the yellow line is expected left/middle and white on the right.
         yellow_mask[:, int(self.yellow_right_cutoff * w):] = 0
         white_mask[:, :int(self.white_left_cutoff * w)] = 0
@@ -420,6 +451,193 @@ class LaneFollowerNode(DTROS):
 
         return lane_error, debug_image, debug_mask
 
+    def detect_ducks_bgr(self, image):
+        """Compact yellow candidates, not semantic duck recognition or distance."""
+        self.validate_image(image)
+        h, w = image.shape[:2]
+        mask = cv2.inRange(cv2.cvtColor(image, cv2.COLOR_BGR2HSV),
+                           self.duck_lower, self.duck_upper)
+        mask[:int(.45*h)] = 0
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        boxes = []
+        for contour in contours:
+            x, y, bw, bh = cv2.boundingRect(contour)
+            area = cv2.contourArea(contour)
+            # Thin lane paint is rejected. A wide dash or merged duck/paint may
+            # remain ambiguous; colour and silhouette cannot prove object identity.
+            if (bw >= .045*w and bh >= .065*h and .45 <= bw/bh <= 2.5
+                    and area >= .003*h*w and area >= .35*bw*bh):
+                boxes.append((x, y, bw, bh))
+        return sorted(boxes, key=lambda b: b[1]+b[3], reverse=True)
+
+    def detect_road_geometry(self, image):
+        """Require three ordered markings in three near-field image bands.
+
+        No inferred lane widths or single-line fallback are allowed for passing.
+        Pixel margins are provisional and must be measured at camera height.
+        """
+        h, w = image.shape[:2]
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        yellow = cv2.inRange(hsv, self.yellow_lower, self.yellow_upper)
+        white = cv2.inRange(hsv, self.white_lower, self.white_upper)
+        for x, y, bw, bh in self._duck_boxes:
+            yellow[y:y+bh, x:x+bw] = 0
+            white[y:y+bh, x:x+bw] = 0
+
+        def stripes(mask):
+            columns = np.flatnonzero(np.count_nonzero(mask, axis=0) >= max(2, mask.shape[0]//3))
+            groups = np.split(columns, np.where(np.diff(columns) > 1)[0]+1)
+            return [float(np.mean(g)) for g in groups if 2 <= len(g) <= .055*w]
+
+        samples = []
+        for fraction in (.62, .74, .86):
+            row = int(fraction*h)
+            ys = stripes(yellow[row:row+max(4, int(.04*h))])
+            ws = stripes(white[row:row+max(4, int(.04*h))])
+            if len(ys) != 1 or len(ws) != 2:
+                return None
+            left, middle, right = ws[0], ys[0], ws[1]
+            widths = (middle-left, right-middle)
+            if not (0 < left < middle < right < w-1 and
+                    all(.12*w <= v <= .48*w for v in widths)
+                    and .5 <= widths[0]/widths[1] <= 2):
+                return None
+            samples.append((left, middle, right))
+        # Tight turns and inconsistent geometry stop passing instead of extrapolating.
+        if np.max(np.ptp(np.array(samples), axis=0)) > .08*w:
+            return None
+        return tuple(float(v) for v in np.mean(samples, axis=0))
+
+    def avoidance_fault(self, reason):
+        if self.avoidance_state not in ("idle", "fault"):
+            self._control_epoch += 1
+        self.avoidance_state = "fault"
+        self._avoidance_reason = reason + "; stop and confirm placement before restart"
+        self.obstacle_stop_latched = True
+        self.manual_stop = True
+        self.reset_steering()
+
+    def avoidance_wheels(self, image, red_visible, obstacle_box, passing_lane_box):
+        """Return None for normal navigation; otherwise own this frame's control.
+
+        This is a restricted, experimental image-feedback pass on a straight,
+        empty two-lane section. It never advances route position or changes turns.
+        """
+        active = self.avoidance_state != "idle"
+        h, w = image.shape[:2]
+        road = self._road_geometry
+        now = time.monotonic()
+        if not active:
+            if not self.avoidance_enabled or not self.drive_enabled or obstacle_box is None:
+                return None
+            if (self.manual_stop or self.obstacle_stop_latched or self.red_stop_latched
+                    or red_visible or self.navigation_state != "following"
+                    or road is None or self.client_expired()
+                    or (self.require_client_heartbeat and self._active_client_id is None)):
+                return None
+            left, middle, right = road
+            targets = [b for b in self._duck_boxes
+                       if b[0] > middle+.035*w and b[0]+b[2] < right-.035*w]
+            if (len(self._duck_boxes) != 1 or len(targets) != 1 or obstacle_box not in targets
+                    or targets[0][1]+targets[0][3] > .88*h):
+                return None
+            self.avoidance_state = "shift_left"
+            self._avoidance_started = now
+            self._avoidance_updated = now
+            self._avoidance_clear_progress = 0.0
+            self._avoidance_stable_since = self._avoidance_clear_since = None
+            self._duck_passed_edge = False
+            self._avoidance_reason = "Experimental pass: acquiring left lane"
+            self.reset_steering()
+        if self.avoidance_state == "fault":
+            return 0.0, 0.0, 0.0
+        if red_visible:
+            self.red_stop_latched = True
+            self._stop_started = now
+        if (road is None or red_visible or self.red_stop_latched or self.manual_stop
+                or self.navigation_state != "following" or self.client_expired()
+                or now-self._avoidance_started > self.avoidance_timeout
+                or not self.drive_enabled):
+            self.avoidance_fault("Passing interrupted or road geometry unavailable")
+            return 0.0, 0.0, 0.0
+        left, middle, right = road
+        # Actual camera centre must remain within the observed outer road edges.
+        if not left+.035*w < .5*w < right-.035*w:
+            self.avoidance_fault("Insufficient visible road margin")
+            return 0.0, 0.0, 0.0
+        if len(self._duck_boxes) > 1 or any(
+                b[0] < middle+.025*w or b[0]+b[2] > right-.025*w
+                for b in self._duck_boxes):
+            self.avoidance_fault("Duck position or neighbouring lane clearance ambiguous")
+            return 0.0, 0.0, 0.0
+        if passing_lane_box is not None:
+            self.avoidance_fault("Candidate in passing lane")
+            return 0.0, 0.0, 0.0
+        dt = min(max(now-self._avoidance_updated, 0.0), .1)
+        self._avoidance_updated = now
+        state = self.avoidance_state
+        target = (middle+right)/2 if state == "return_right" else (left+middle)/2
+        error = (target-.5*w)/(.5*w)
+        if state == "shift_left":
+            if not self._duck_boxes:
+                self.avoidance_fault("Lost duck before establishing passing lane")
+                return 0.0, 0.0, 0.0
+            if self._duck_boxes[0][1]+self._duck_boxes[0][3] > .94*h:
+                self.avoidance_fault("Duck too near before lane change completed")
+                return 0.0, 0.0, 0.0
+            if abs(error) < .08:
+                if self._avoidance_stable_since is None:
+                    self._avoidance_stable_since = now
+                if now-self._avoidance_stable_since >= .3:
+                    self.avoidance_state = "passing"
+                    self._avoidance_stable_since = None
+            else:
+                self._avoidance_stable_since = None
+        elif state == "passing":
+            if self._duck_boxes:
+                box = self._duck_boxes[0]
+                self._duck_passed_edge = box[1]+box[3] >= .92*h and box[0] > .55*w
+                self._avoidance_clear_since = None
+                self._avoidance_clear_progress = 0.0
+            elif not self._duck_passed_edge:
+                self.avoidance_fault("Duck disappeared before side passage was observed")
+                return 0.0, 0.0, 0.0
+            else:
+                if abs(error) >= .08:
+                    self._avoidance_clear_since = None
+                    self._avoidance_clear_progress = 0.0
+                elif self._avoidance_clear_since is None:
+                    self._avoidance_clear_since = now
+                else:
+                    # Command-weighted allowance handles speed scaling/ramp-up;
+                    # it remains an estimate, not odometry or proof of clearance.
+                    fraction = min(self._last_wheel_speeds) / self.avoidance_speed
+                    self._avoidance_clear_progress += dt * min(1.0, fraction)
+                    if self._avoidance_clear_progress >= self.avoidance_clear_seconds:
+                        self.avoidance_state = "return_right"
+                        self._avoidance_stable_since = None
+                        self.reset_steering()
+        elif state == "return_right":
+            if self._duck_boxes or obstacle_box is not None:
+                self.avoidance_fault("Return corridor contains an obstacle candidate")
+                return 0.0, 0.0, 0.0
+            if abs(error) < .08:
+                if self._avoidance_stable_since is None:
+                    self._avoidance_stable_since = now
+                if now-self._avoidance_stable_since >= .3:
+                    self.avoidance_state = "idle"
+                    self._avoidance_reason = "Right lane reacquired; previous route retained"
+                    self.reset_steering()
+                    return 0.0, 0.0, 0.0
+            else:
+                self._avoidance_stable_since = None
+        self._avoidance_reason = "Experimental pass: " + self.avoidance_state
+        speeds = self.compute_wheel_speeds(error)
+        cap = self.avoidance_speed * min(1.0, self.speed_scale)
+        ratio = min(1.0, cap / max(speeds[0], speeds[1], .001))
+        return speeds[0]*ratio, speeds[1]*ratio, speeds[2]
+
     def detect_obstacle_bgr(self, img_bgr):
         """Provisional compact bright/colored-object detector for the lane corridor.
 
@@ -436,6 +654,10 @@ class LaneFollowerNode(DTROS):
         y0, y1 = int(h * 0.55), int(h * 0.95)
         if x1 <= x0:
             return None
+        for box in self._duck_boxes:
+            x, y, bw, bh = box
+            if x < x1 and x+bw > x0 and y+bh >= .68*h:
+                return box
         hsv = cv2.cvtColor(img_bgr[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
         colored = cv2.inRange(hsv, np.array([0, 90, 70]), np.array([180, 255, 255]))
         bright = cv2.inRange(hsv, np.array([0, 0, 140]), np.array([180, 90, 255]))
@@ -619,6 +841,11 @@ class LaneFollowerNode(DTROS):
             "lane_diagnostic": self._lane_diagnostic,
             "stop_reason": self._stop_reason,
             "lane_error": self._last_lane_error,
+            "duck_candidates": list(self._duck_boxes),
+            "road_geometry": self._road_geometry,
+            "avoidance_enabled": self.avoidance_enabled,
+            "avoidance_state": self.avoidance_state,
+            "avoidance_reason": self._avoidance_reason,
         }
 
     def publish_status(self):
@@ -653,6 +880,8 @@ class LaneFollowerNode(DTROS):
             if time.monotonic() - self._last_frame_time > self._camera_timeout:
                 self._camera_valid = False
                 self._camera_error = "Camera timeout"
+                if self.avoidance_state not in ("idle", "fault"):
+                    self.avoidance_fault("Camera timeout during passing")
                 self._obstacle_clear_since = None
                 if self.navigation_state in ("crossing", "reacquiring"):
                     self.navigation_fault("Camera lost during junction; position must be reset")
@@ -711,7 +940,11 @@ class LaneFollowerNode(DTROS):
                 if (action != "stop" and "expected_control_epoch" in command
                         and command["expected_control_epoch"] != self._control_epoch):
                     raise ValueError("A stop superseded this command; read fresh status")
+                if self.avoidance_state != "idle" and action != "stop":
+                    raise ValueError("Passing owns movement; stop and confirm placement before changing commands")
                 if action == "stop":
+                    if self.avoidance_state not in ("idle", "fault"):
+                        self.avoidance_fault("Manual stop during passing")
                     self._control_epoch += 1
                     self._active_client_id = None
                     self._client_connection_lost = False
@@ -891,6 +1124,8 @@ class LaneFollowerNode(DTROS):
         with self._wheel_lock:
             self._camera_valid = False
             self._camera_error = str(reason)
+            if self.avoidance_state not in ("idle", "fault"):
+                self.avoidance_fault("Invalid camera during passing")
             self._lane_limits = None
             self._lane_both_visible = False
             self._last_lane_error = None
@@ -912,15 +1147,25 @@ class LaneFollowerNode(DTROS):
                 self.validate_image(img_bgr)
                 # Detection mutates only this private snapshot until all checks pass.
                 perception = copy.copy(self)
+                perception._duck_boxes = perception.detect_ducks_bgr(img_bgr)
+                perception._road_geometry = perception.detect_road_geometry(img_bgr)
                 red_visible = perception.detect_red_stop(img_bgr)
                 lane_error, debug_image, debug_mask = perception.detect_lane_bgr(img_bgr)
                 obstacle_box = perception.detect_obstacle_bgr(img_bgr)
+                passing_lane_box = None
+                if perception._road_geometry is not None:
+                    limits = perception._lane_limits
+                    perception._lane_limits = perception._road_geometry[:2]
+                    passing_lane_box = perception.detect_obstacle_bgr(img_bgr)
+                    perception._lane_limits = limits
                 with self._wheel_lock:
                     if self._stopping:
                         return
                     self.camera_stamp(msg, received_at)
                     if received_at - self._last_frame_time > self._camera_timeout:
                         self._obstacle_clear_since = None
+                        if self.avoidance_state not in ("idle", "fault"):
+                            self.avoidance_fault("Camera gap during passing")
                     self._last_frame_time = time.monotonic() - max(
                         time.monotonic() - received_at, rospy.Time.now().to_sec() - stamp, 0.0)
                     self._last_camera_stamp = stamp
@@ -930,8 +1175,18 @@ class LaneFollowerNode(DTROS):
                     self._lane_limits = perception._lane_limits
                     self._lane_both_visible = perception._lane_both_visible
                     self._lane_diagnostic = perception._lane_diagnostic
-                    self.update_obstacle(obstacle_box)
-                    left_speed, right_speed, steering = self.navigation_wheels(lane_error, red_visible)
+                    self._duck_boxes = perception._duck_boxes
+                    self._road_geometry = perception._road_geometry
+                    self.check_client_connection()
+                    avoidance = self.avoidance_wheels(img_bgr, red_visible, obstacle_box, passing_lane_box)
+                    if avoidance is None:
+                        self.update_obstacle(obstacle_box)
+                        left_speed, right_speed, steering = self.navigation_wheels(lane_error, red_visible)
+                    else:
+                        self._obstacle_box = obstacle_box
+                        self._obstacle_visible = obstacle_box is not None
+                        self._obstacle_clear_since = None
+                        left_speed, right_speed, steering = avoidance
                     self.publish_wheels(left_speed, right_speed)
             except (CvBridgeError, cv2.error, ValueError, TypeError, AttributeError) as error:
                 rospy.logwarn("Could not process camera image: %s", error)
@@ -944,10 +1199,18 @@ class LaneFollowerNode(DTROS):
             cv2.putText(debug_image, "L %.3f  R %.3f | %s" % (
                 *self._last_wheel_speeds, self._stop_reason or "Following"), (10, 115),
                 cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 0), 1)
+            cv2.putText(debug_image, self._avoidance_reason, (10, 140),
+                        cv2.FONT_HERSHEY_SIMPLEX, .45, (255, 0, 255), 1)
+            if self._road_geometry is not None:
+                for boundary in self._road_geometry:
+                    cv2.line(debug_image, (int(boundary), int(.62*img_bgr.shape[0])),
+                             (int(boundary), int(.90*img_bgr.shape[0])), (255, 200, 0), 1)
+            for x, y, bw, bh in self._duck_boxes:
+                cv2.rectangle(debug_image, (x, y), (x+bw, y+bh), (0, 165, 255), 2)
             if self._obstacle_box is not None:
                 x, y, width, height = self._obstacle_box
                 cv2.rectangle(debug_image, (x, y), (x+width, y+height), (255, 0, 255), 2)
-                cv2.putText(debug_image, "STOP: obstacle candidate", (10, 60),
+                cv2.putText(debug_image, "Obstacle candidate", (10, 60),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
             if self.red_stop_latched:
                 cv2.putText(debug_image, "STOP: red line", (10, 30),
@@ -974,6 +1237,8 @@ class LaneFollowerNode(DTROS):
             if self._stopping:
                 return
             self._stopping = True
+            if self.avoidance_state not in ("idle", "fault"):
+                self.avoidance_fault("Shutdown during passing")
             self.publish_wheels(0.0, 0.0)
         if self.show_debug:
             cv2.destroyAllWindows()

@@ -50,3 +50,15 @@ companion tests). The new and existing window checks blocked network access.
 These tests validate interpretation and translation, not live command delivery,
 controller acceptance or physical completion. Existing robot and gateway code
 is unchanged by this feature.
+
+## Obstacle language
+
+Try "duck", "obstacle", "yellow object blocking the path", "something in the way",
+"there is a duck ahead", or "the road is blocked". These are user reports, never
+camera-verified observations. Follow with "go around it", or say "avoid the duck"
+or "bypass the obstacle". The interpretation describes a left pass, right-lane
+return and retention of the prior route. It does not send anything to the robot.
+
+Obstacle requests have no executable preview mapping and remove stale recordable
+drafts. The controller prototype is separate and disabled pending calibration;
+see [DUCK_AVOIDANCE.md](../docs/DUCK_AVOIDANCE.md).

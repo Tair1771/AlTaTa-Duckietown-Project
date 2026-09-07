@@ -1,5 +1,29 @@
 # Local verification
 
+## Experimental duck avoidance update (2026-09-07)
+
+Added 18 synthetic controller/perception tests and four obstacle-language tests.
+The combined regression command ran 109 tests: 108 passed and one Windows-only
+test was skipped in Linux. Native Windows runs then passed all ten preview tests
+(including that lifecycle test) and the separate interpreter-window lifecycle
+test with sockets, HTTP, child processes and connected-code imports blocked.
+
+The isolated ROS suite passed against the current source mounted into the image:
+existing lane, route, gateway, heartbeat, recorder and launcher checks, plus a
+JPEG-driven pass/return sequence retaining a configured route, driving-disabled
+zero output and SIGINT zero-message delivery during passing.
+
+A read-only probe of the supplied 1200x1600 tabletop photo found two compact
+yellow candidate regions. Both boxes were clipped at the detector's 45%-height
+ROI boundary; this was a colour/body-candidate check, not a complete silhouette
+or road test. No three-boundary road geometry was found, as expected.
+
+Passing remains disabled in all existing launchers. No robot was contacted.
+See [DUCK_AVOIDANCE.md](DUCK_AVOIDANCE.md) for provisional parameters, limits and
+physical checks. Rebuild before future deployment; these checks mounted current
+source and did not update the stored image.
+
+
 ## First-test readiness update (2026-09-07)
 
 The node now validates settings before subscribing, rejects invalid/stale/repeated

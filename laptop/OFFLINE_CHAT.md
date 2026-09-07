@@ -69,3 +69,15 @@ The UI test constructs the actual window, interprets messages, clears it, and
 closes it while network and child-process creation are blocked. It also blocks
 imports of the existing connected companion and ROS. The interpreter tests
 check both language behavior and the small offline-only import dependencies.
+
+## Obstacle language
+
+Try "duck", "obstacle", "yellow object blocking the path", "something in the way",
+"there is a duck ahead", or "the road is blocked". These are user reports, never
+camera-verified observations. Follow with "go around it", or say "avoid the duck"
+or "bypass the obstacle". The interpretation describes a left pass, right-lane
+return and retention of the prior route. It does not send anything to the robot.
+
+Obstacle requests have no executable preview mapping and remove stale recordable
+drafts. The controller prototype is separate and disabled pending calibration;
+see [DUCK_AVOIDANCE.md](../docs/DUCK_AVOIDANCE.md).

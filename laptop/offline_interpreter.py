@@ -44,7 +44,7 @@ for _unit, _canonical in [("meter", "m/s"), ("metre", "m/s"), ("centimeter", "cm
         SPEED_UNITS[_unit + _plural + " per second"] = _canonical
 SPEED_UNITS.update({"kilometres per hour": "km/h", "kilometers per hour": "km/h", "miles per hour": "mph"})
 CHECKPOINT = r"(?:the )?(?:next )?(?:red line|checkpoint)(?: before (?:the |a )?(?:next )?turn)?"
-REQUEST_CATEGORIES = {"speed_change", "speed_setting", "turn", "stop", "interrupt", "reverse"}
+REQUEST_CATEGORIES = {"speed_change", "speed_setting", "turn", "stop", "interrupt", "reverse", "obstacle"}
 
 
 def _number_words(match):
@@ -140,6 +140,15 @@ def complete(category, parameters):
             return clarification("What reverse distance or duration do you mean?", category, p, ["distance_or_duration"])
         if p.get("speed", {}).get("unit", "known") is None:
             return clarification("What speed units do you mean: percent, cm/s, or m/s?", category, p, ["speed_unit"])
+    if category == "obstacle":
+        if p.get("intent") == "avoid":
+            description = "a request to pass the obstacle on the left, return to the right lane, and retain the previous route"
+        else:
+            description = "your report of an obstacle in the path"
+        return Interpretation(category, p, reply="I understood: " + description +
+                              ". Interpretation only; nothing was sent or executed. "
+                              "I cannot see the robot camera or confirm a clear passing lane. "
+                              "Experimental automatic passing needs physical calibration.")
     if category == "speed_change":
         description = ("increase" if p["direction"] == "increase" else "decrease") + " the speed"
         if "amount" in p:
@@ -216,7 +225,7 @@ class OfflineInterpreter:
         if message in ("thanks", "thank you", "thank you very much", "great", "okay", "ok"):
             return Interpretation("conversation", reply="You're welcome. We are only discussing requests; no robot actions are being performed.")
         if message in ("help", "what can you do", "what commands do you understand", "what can i say", "how does this work"):
-            return Interpretation("help", reply="I can interpret speed changes, next turns, immediate or conditional stops, interruption, and reverse requests with a distance or duration. Try 'stop after two seconds'. I cannot execute requests or undo movements.")
+            return Interpretation("help", reply="I can interpret speed changes, next turns, immediate or conditional stops, interruption, reverse requests with a distance or duration, and obstacle reports or avoidance requests. Try 'stop after two seconds'. I cannot execute requests or undo movements.")
         if re.fullmatch(r"(?:can (?:the (?:bot|robot)|duck2|it) (?:move backwards|reverse)|(?:what|how|where) (?:is|are) .+|status|are you moving|how fast .+)", message):
             return Interpretation("status_unavailable", reply="I have no live robot connection or status. I cannot verify its position, movement, speed, or ability to reverse.")
         if message in ("cancel", "cancel that", "forget that", "reset conversation"):
@@ -233,7 +242,40 @@ class OfflineInterpreter:
             return clarification("Please describe one action at a time. A reverse request may include its distance or duration and speed together.")
         return clarification("I didn't understand a supported request. Try 'slow down', 'take the next right', or 'stop after two seconds'. Nothing was sent or executed.")
 
+    def _obstacle_request(self, message):
+        # Whole-message matching prevents descriptions, negation and compounds
+        # from accidentally becoming an avoidance command.
+        noun = r"(?:duck|ducks|obstacle|obstacles|yellow (?:object|duck|toy)|rubber duck|something|object)"
+        target = r"(?:(?:a|an|the|that) )?" + noun
+        location = r"(?:in (?:the |our |my )?(?:way|path|lane|road)|ahead|blocking (?:the |our |my )?(?:path|lane|road))"
+        if re.fullmatch(r"(?:is there |do you see |can you see )" + target + r"(?: " + location + r")?", message):
+            return Interpretation("status_unavailable", reply="I cannot see a live camera or confirm an obstacle. This is an offline text interpreter.")
+        report = (re.fullmatch(target + r"(?: " + location + r")?", message)
+                  or re.fullmatch(r"(?:there is |there are |there's |i see |i can see )" + target + r"(?: " + location + r")?", message)
+                  or re.fullmatch(target + r" (?:is |are )" + location, message))
+        if message in ("the path is blocked", "the road is blocked", "our lane is blocked",
+                       "something is blocking the way", "there is something in front of us"):
+            report = True
+        if report:
+            return complete("obstacle", {"intent": "report", "object": "obstacle",
+                                         "source": "user_report", "camera_verified": False})
+        if re.fullmatch(r"(?:avoid|go around|drive around|pass|overtake|get around|bypass) " + target, message):
+            return complete("obstacle", {"intent": "avoid", "pass_side": "left",
+                                         "return_lane": "right", "preserve_route": True})
+        if re.fullmatch(r"(?:avoid|go around|pass|bypass) it", message):
+            if self.last_request and self.last_request.category == "obstacle":
+                return complete("obstacle", {"intent": "avoid", "pass_side": "left",
+                                             "return_lane": "right", "preserve_route": True})
+            return clarification("What should be avoided? Try 'go around the duck'.")
+        if message in ("obstacle avoidance", "avoid obstacles automatically"):
+            return complete("obstacle", {"intent": "avoid", "pass_side": "left",
+                                         "return_lane": "right", "preserve_route": True})
+        return None
+
     def _request(self, message):
+        obstacle = self._obstacle_request(message)
+        if obstacle is not None:
+            return obstacle
         if message in ("stop", "halt", "wait", "stop now", "halt now", "stop immediately", "come to a stop"):
             return complete("stop", {"condition": "immediate"})
         if message in ("interrupt all movement", "interrupt all movement immediately", "interrupt movement", "stop everything", "stop all movement", "emergency stop", "cancel all movement", "halt everything"):

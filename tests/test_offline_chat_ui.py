@@ -45,6 +45,13 @@ class OfflineWindowTests(unittest.TestCase):
                     details = json.loads(window.details.get("1.0", "end"))
                     self.assertTrue(details["interpretation_only"])
                 self.assertEqual(details["parameters"]["direction"], "left")
+                for phrase in ("yellow object blocking the path", "go around it"):
+                    window.message.set(phrase)
+                    window.send()
+                    root.update()
+                    details = json.loads(window.details.get("1.0", "end"))
+                    self.assertEqual(details["category"], "obstacle")
+                    self.assertTrue(details["interpretation_only"])
                 window.clear()
                 self.assertIsNone(window.interpreter.last_request)
                 self.assertEqual(window.details.get("1.0", "end").strip(), "")

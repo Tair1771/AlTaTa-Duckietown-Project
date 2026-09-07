@@ -167,6 +167,13 @@ class WindowTests(unittest.TestCase):
                 window.message.set("stop after two seconds")
                 window.send()
                 self.assertTrue(window.record_button.instate(["disabled"]))
+                for phrase in ("duck", "go around it", "something in the way",
+                               "don't avoid the duck", "the road is blocked"):
+                    window.message.set(phrase)
+                    window.send()
+                    root.update()
+                    self.assertTrue(window.record_button.instate(["disabled"]))
+                    self.assertIsNone(window.session.draft)
                 window.clear()
                 self.assertEqual(window.session.receiver.records, [])
                 self.assertEqual(window.history.get("1.0", "end").strip(), "")

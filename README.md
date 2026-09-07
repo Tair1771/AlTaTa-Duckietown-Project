@@ -17,6 +17,7 @@ still require physical testing.
 | Offline command preview | Basic stop, speed changes, and next-turn drafts; in-memory preview records | No delivery, movement simulation, or execution |
 | ROS lane follower | OpenCV yellow/white lane detection and stamped left/right wheel commands | Needs our own camera and motor calibration |
 | Stopping safeguards | Settings validation, camera freshness checks, lane-loss stops, steering reset, zero output on shutdown | Does not establish physical stopping distance |
+| Experimental duck passing | Compact yellow candidates and optional left-pass/right-return feedback | Disabled by default; [calibration and limitations](docs/DUCK_AVOIDANCE.md) |
 | Red-line / obstacle handling | Latched red stops and a provisional bright/coloured obstacle heuristic | Dark objects may be missed; not general recognition |
 | Route / connected companion | Existing route state machine, HTTP gateway, controls, acknowledgments, and heartbeat handling | Placement and junction calibration required; physical operation unverified |
 | Camera diagnostics / recorder | Lane overlays, stop reasons, actual published wheel values, and image capture | Real track recordings still needed |
@@ -24,6 +25,11 @@ still require physical testing.
 The offline chatbot is a **rule-based parser with conversation memory**, not an
 LLM. It understands a bounded collection of English phrases. It does not know
 live robot status. Closing either offline app discards its conversation state.
+
+Obstacle phrases such as "something in the way", "duck", and "go around it" are
+understood by both offline windows. They remain interpretations with no recordable
+avoidance command or robot delivery. See [duck avoidance](docs/DUCK_AVOIDANCE.md)
+for the separate experimental controller, its parameters and required checks.
 
 ## How the parts connect
 

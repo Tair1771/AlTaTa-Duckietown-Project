@@ -45,9 +45,11 @@ def translate(result):
                        ["A route and starting position must be configured.",
                         "The requested exit must be available and accepted by the controller.",
                         "Physical readiness and junction calibration are unknown."])
-    if result.category in ("stop", "interrupt", "reverse", "unsupported", "speed_setting"):
+    if result.category in ("stop", "interrupt", "reverse", "unsupported", "speed_setting", "obstacle"):
         return Preview("unsupported_request", explanation=(result.reply +
             " This request has no execution mapping in this preview app. No simpler command was substituted."))
+    if result.category == "status_unavailable" and "obstacle" in result.reply:
+        return Preview("clarification_needed", explanation=result.reply)
     if result.category in ("negated", "hypothetical", "clarification"):
         return Preview("clarification_needed", explanation=result.reply)
     return Preview("conversation_only", explanation=result.reply)

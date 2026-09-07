@@ -281,6 +281,49 @@ try:
     assert camera.get_num_connections()==0
     print("PASS combined launcher: node and gateway start together; Ctrl+C stops wheel output",
           flush=True)
+    # Experimental avoidance against real ROS messages, with fake camera scenes.
+    def passing_scene(left_lane=False, duck=True, near=False):
+        frame=np.zeros((480,640,3),dtype=np.uint8)
+        for x,color in zip((230,410,590) if left_lane else (50,230,410),
+                           ((255,255,255),(0,255,255),(255,255,255))):
+            cv2.rectangle(frame,(x-6,240),(x+6,475),color,-1)
+        if duck:
+            x=460 if left_lane else 280
+            y=409 if near else 345
+            cv2.rectangle(frame,(x,y),(x+48,y+48),(0,255,255),-1)
+        return frame
+
+    pass_flags=["_avoidance_enabled:=true","_avoidance_calibrated:=true",
+                "_route_enabled:=true","_require_client_heartbeat:=false"]
+    start("false", pass_flags)
+    stream(passing_scene(),.5)
+    assert received and all(v==(0.,0.) for v in received)
+    stop()
+    start("true", pass_flags)
+    stream(passing_scene(duck=False),.3)
+    command("set_route", route=["A","D","C"], position_confirmed=True)
+    command("continue")
+    received.clear()
+    stream(passing_scene(),.4)
+    assert latest_status["avoidance_state"]=="shift_left",latest_status
+    route_before=list(latest_status["route"])
+    index_before=latest_status["route_index"]
+    stream(passing_scene(left_lane=True),.6)
+    assert latest_status["avoidance_state"]=="passing",latest_status
+    stream(passing_scene(left_lane=True,near=True),.2)
+    stream(passing_scene(left_lane=True,duck=False),1.3)
+    assert latest_status["avoidance_state"]=="return_right",latest_status
+    assert all(max(v)<=.040001 for v in received),received[-5:]
+    stream(passing_scene(duck=False),.6)
+    assert latest_status["avoidance_state"]=="idle",latest_status
+    assert latest_status["route"]==route_before and latest_status["route_index"]==index_before
+    stream(passing_scene(),.3)
+    assert latest_status["avoidance_state"]=="shift_left",latest_status
+    received.clear()
+    stop()
+    assert received and received[-1]==(0.,0.), "Shutdown during passing did not deliver zero"
+    print("PASS actual ROS: experimental pass/return retains route; debug and shutdown stay zero",
+          flush=True)
 finally:
     if capture_process is not None and capture_process.poll() is None:
         capture_process.terminate()
