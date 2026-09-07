@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>duckie_lane_follower</name>
+  <version>0.0.1</version>
+  <description>OpenCV lane follower adapted from the local Gym-Duckietown prototype.</description>
+  <maintainer email="student@example.com">Student</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>rospy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>duckietown_msgs</depend>
+  <depend>cv_bridge</depend>
+
+  <exec_depend>duckietown</exec_depend>
+</package>

@@ -1,0 +1,159 @@
+{
+  "model": "Qwen2.5-1.5B-Instruct Q4_K_M",
+  "cases": [
+    {
+      "name": "slow_paraphrase",
+      "passed": false,
+      "seconds": 7.64,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "Reduce the speed slightly."
+      }
+    },
+    {
+      "name": "relative_followup",
+      "passed": false,
+      "seconds": 2.86,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "Which action do you mean?"
+      }
+    },
+    {
+      "name": "faster_paraphrase",
+      "passed": false,
+      "seconds": 2.22,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "Increase the speed slightly."
+      }
+    },
+    {
+      "name": "right_next",
+      "passed": false,
+      "seconds": 1.8,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": "right",
+        "explanation": "Specify the direction of the turn."
+      }
+    },
+    {
+      "name": "correct_direction",
+      "passed": false,
+      "seconds": 2.72,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "Which direction do you want to take?"
+      }
+    },
+    {
+      "name": "restore_speed",
+      "passed": false,
+      "seconds": 3.69,
+      "interpretation": {
+        "action": "speed_scale",
+        "speed_scale": 0.8,
+        "turn": null,
+        "explanation": "Restore the speed before slowing down."
+      }
+    },
+    {
+      "name": "status_question",
+      "passed": true,
+      "seconds": 2.38,
+      "interpretation": {
+        "action": "status",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "Check the next junction in current status."
+      }
+    },
+    {
+      "name": "stop_paraphrase",
+      "passed": true,
+      "seconds": 1.48,
+      "interpretation": {
+        "action": "stop",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "Wait for a moment."
+      }
+    },
+    {
+      "name": "continue_paraphrase",
+      "passed": true,
+      "seconds": 2.55,
+      "interpretation": {
+        "action": "continue",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "Proceed to the next junction."
+      }
+    },
+    {
+      "name": "ambiguous",
+      "passed": true,
+      "seconds": 2.61,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "What action do you want to perform?"
+      }
+    },
+    {
+      "name": "compound",
+      "passed": true,
+      "seconds": 1.59,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "Which action do you mean?"
+      }
+    },
+    {
+      "name": "negation",
+      "passed": true,
+      "seconds": 1.66,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "What action do you want to perform?"
+      }
+    },
+    {
+      "name": "bypass_request",
+      "passed": true,
+      "seconds": 1.67,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": null,
+        "explanation": "Safety checks cannot be bypassed."
+      }
+    },
+    {
+      "name": "unsupported_timing",
+      "passed": true,
+      "seconds": 1.62,
+      "interpretation": {
+        "action": "clarify",
+        "speed_scale": null,
+        "turn": "right",
+        "explanation": "Specify the turn later."
+      }
+    }
+  ]
+}

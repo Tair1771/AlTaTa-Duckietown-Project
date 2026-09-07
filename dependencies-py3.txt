@@ -1,2 +1,3 @@
-# LIST YOUR PYTHON3 PACKAGES HERE
-# NOTE: only place non-Duckietown libraries here; pin versions only if necessary
+# Intentionally left almost empty.
+# The Duckietown ROS base image normally provides rospy, cv_bridge, duckietown_msgs, cv2, and numpy.
+# Avoid adding opencv-python here unless the build fails, because pip OpenCV can be problematic on ARM robots.

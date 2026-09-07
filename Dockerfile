@@ -1,7 +1,7 @@
 # parameters
-ARG REPO_NAME="<REPO_NAME_HERE>"
-ARG DESCRIPTION="<DESCRIPTION_HERE>"
-ARG MAINTAINER="<YOUR_FULL_NAME> (<YOUR_EMAIL_ADDRESS>)"
+ARG REPO_NAME="duckiebot-ros"
+ARG DESCRIPTION="OpenCV lane following, obstacle avoidance, and command control for Duckiebot"
+ARG MAINTAINER="Tair, Alvaro, Tan - TUM Duckiebot Team"
 # pick an icon from: https://fontawesome.com/v4.7.0/icons/
 ARG ICON="cube"
 
