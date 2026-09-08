@@ -1,12 +1,12 @@
-# Ignore everything
+# Only application packaging inputs belong in the image build context.
 **
-
-# Allow files and directories
-!assets
-!packages
-!dependencies-apt.txt
-!dependencies-py3.*
-!launchers
-
-# YOUR FILES LISTED BELOW THIS LINE (IMPORTANT: PREPEND !)
-# ----------------------------------------------------------------------------
+!Dockerfile
+!packages/
+!packages/duckie_lane_follower/
+!packages/duckie_lane_follower/**
+!launchers/
+!launchers/**
+!config/
+!config/duck2.json
+**/__pycache__/
+**/*.pyc

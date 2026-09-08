@@ -1,153 +1,103 @@
 # Duck2: lane following and offline command previews
 
-University Duckietown project for **duck2**. This repository contains our ROS 1
-lane follower, an offline English request interpreter, a separate command-preview
-app, and an existing connected desktop companion.
+This is the Duck2 university project. It contains a ROS 1 lane follower,
+diagnostic launchers, an interpretation-only offline chatbot and a separate
+offline command-preview window. The chatbot needs no API key and neither
+offline app connects to a robot.
 
-**Start with the offline preview app. It needs no API key, Docker, ROS, or bot
-connection.** The robot code has passed synthetic and isolated ROS checks.
-Camera calibration, motor response, stopping distance, and junction traversal
-still require physical testing.
+The project is matched locally to the ROS runtime installed on duck2. A live
+camera compatibility check succeeded with driving disabled and the wheel output
+redirected to a diagnostic topic. **No real wheel command, calibration,
+deployment or driving test has been performed.**
 
-## What we currently have
+## What is included
 
-| Component | Current behaviour | Limit |
+| Component | What it does now | What it does not prove |
 | --- | --- | --- |
-| Offline interpreter | Curated English requests, numbers, units, corrections, follow-up answers, greetings, and clarification | Describes requests only |
-| Offline command preview | Basic stop, speed changes, and next-turn drafts; in-memory preview records | No delivery, movement simulation, or execution |
-| ROS lane follower | OpenCV yellow/white lane detection and stamped left/right wheel commands | Needs our own camera and motor calibration |
-| Stopping safeguards | Settings validation, camera freshness checks, lane-loss stops, steering reset, zero output on shutdown | Does not establish physical stopping distance |
-| Experimental duck passing | Compact yellow candidates and optional left-pass/right-return feedback | Disabled by default; [calibration and limitations](docs/DUCK_AVOIDANCE.md) |
-| Red-line / obstacle handling | Latched red stops and a provisional bright/coloured obstacle heuristic | Dark objects may be missed; not general recognition |
-| Route / connected companion | Existing route state machine, HTTP gateway, controls, acknowledgments, and heartbeat handling | Placement and junction calibration required; physical operation unverified |
-| Camera diagnostics / recorder | Lane overlays, stop reasons, actual published wheel values, and image capture | Real track recordings still needed |
+| Offline interpreter | Understands a curated set of English requests, follow-ups and corrections | Live robot status or execution |
+| Offline command preview | Prepares basic `stop`, speed-step and next-turn drafts and records local test copies | ROS delivery or controller acceptance |
+| Lane follower | Processes compressed camera images, detects existing yellow/white lane markings and publishes wheel messages | Correct physical colour, steering or speed calibration |
+| Safety logic | Validates settings, rejects bad camera timestamps, stops on lane loss and publishes zero on shutdown | Physical braking distance |
+| Duck avoidance prototype | Optional, disabled-by-default candidate detection and passing state | Reliable obstacle avoidance on the course |
+| Runtime packaging | Builds the package over duck2's pinned ROS Noetic base image | A deployed or running controller |
 
-The offline chatbot is a **rule-based parser with conversation memory**, not an
-LLM. It understands a bounded collection of English phrases. It does not know
-live robot status. Closing either offline app discards its conversation state.
+The confirmed ROS interfaces are:
 
-Obstacle phrases such as "something in the way", "duck", and "go around it" are
-understood by both offline windows. They remain interpretations with no recordable
-avoidance command or robot delivery. See [duck avoidance](docs/DUCK_AVOIDANCE.md)
-for the separate experimental controller, its parameters and required checks.
-
-## How the parts connect
-
-```text
-Offline interpreter window -> interpretation -> reply only
-
-Offline preview window -> same interpreter -> translation -> draft
-                                                       -> Record preview
-                                                       -> in-memory fake receiver
-
-Existing connected companion -> HTTP gateway -> ROS commands -> controller
-
-Compressed camera -> OpenCV lane follower -> stamped wheel commands
-```
-
-There is currently **no robot-delivery path from either offline app**.
-Interpretation, a command preview, controller acceptance, and physical completion
-are separate stages.
-
-| Interface | Topic | Message |
+| Purpose | Interface | Type |
 | --- | --- | --- |
-| Camera input | /${VEHICLE_NAME}/camera_node/image/compressed | sensor_msgs/CompressedImage |
-| Wheel output | /${VEHICLE_NAME}/wheels_driver_node/wheels_cmd | duckietown_msgs/WheelsCmdStamped |
-| High-level requests | /${VEHICLE_NAME}/lane_follower/command | std_msgs/String with JSON |
-| Status | /${VEHICLE_NAME}/lane_follower/status | std_msgs/String with JSON |
+| Camera input | `/${VEHICLE_NAME}/camera_node/image/compressed` | `sensor_msgs/CompressedImage` |
+| Wheel output | `/${VEHICLE_NAME}/wheels_driver_node/wheels_cmd` | `duckietown_msgs/WheelsCmdStamped` |
+| High-level request | `/${VEHICLE_NAME}/lane_follower/command` | JSON in `std_msgs/String` |
+| Status | `/${VEHICLE_NAME}/lane_follower/status` | JSON in `std_msgs/String` |
 
-Our robot name is `duck2`. The Duckietown runtime supplies `VEHICLE_NAME`.
+`VEHICLE_NAME` is supplied by Duckietown at runtime; our robot name is `duck2`.
 
-## Setup A: offline chatbots on Windows
+## Get the project and keep one working copy
 
-### 1. Download the project
-
-Accept the GitHub invitation if the repository is private. Use **Code ->
-Download ZIP** and extract it, or clone with Git. Replace the placeholder below
-with the team's actual GitHub path:
+Install Git or GitHub Desktop. In PowerShell, choose the parent folder where
+you want to work, then run:
 
 ```powershell
-git clone https://github.com/YOUR-ACCOUNT/YOUR-REPOSITORY.git duckiebot-ros
-cd duckiebot-ros
+git clone https://github.com/Tair1771/AlTaTa-Duckietown-Project.git
+cd AlTaTa-Duckietown-Project
+git branch --show-current
 ```
 
-Use the team's repository, not the original Duckietown template. The repository
-root contains this README, `Dockerfile`, and `laptop`. The commands in this
-section run in **Windows PowerShell from that root**.
+The shared branch is `main`. In GitHub Desktop, **File → Clone repository → URL**
+does the same job. If the original checkout already exists, add that folder to
+GitHub Desktop instead of creating another upload copy. This project's existing
+WSL checkout is `/home/tkezdekbayev/duckietown/duckiebot-ros`.
 
-### 2. Install and check Python
+Before starting shared work, commit your own changes and fetch/pull `main`.
+With a clean checkout, `git pull --ff-only origin main` updates without making
+an automatic merge. If it reports divergence, resolve it before continuing;
+do not force-push or discard another teammate's work.
 
-Install Windows Python from [python.org](https://www.python.org/downloads/windows/).
-Desktop tests were run with Python 3.12. Include Tcl/Tk support and the Python
-launcher. See [Windows installation details](https://docs.python.org/3.12/using/windows.html).
+## Windows setup: offline apps
 
-Open a new PowerShell window:
+These steps are sufficient for the chatbot and command-preview work. Docker,
+ROS, a bot and an API key are not required.
 
-```powershell
-py -3 --version
-py -3 -m tkinter
-```
+1. Clone this repository or use **Code → Download ZIP** on GitHub, then open
+   Windows PowerShell in the repository folder.
+2. Install current Windows Python from [python.org](https://www.python.org/downloads/windows/), including Tcl/Tk and the Python launcher.
+3. Check Python and Tk:
 
-The second command should open a small Tk window; close it before continuing.
-If `py` is unavailable but `python` works, substitute `python` for `py -3`.
-If Tk is missing, repair/install Python with Tcl/Tk support; do not try to
-install a package named tkinter with pip.
+   ```powershell
+   py -3 --version
+   py -3 -m tkinter
+   ```
 
-**Neither offline app needs pip packages or an API key.** The robot dependency
-files are container inputs, not instructions to install ROS into Windows.
+   Close the small Tk test window.
 
-### 3. Open the app
+   If `py` is unavailable but `python --version` works, substitute `python`
+   for `py -3`. If neither works, install Python and reopen PowerShell. No pip
+   dependencies are needed for the two offline apps. The recorded Windows
+   desktop tests used Python 3.12. Codex and its bundled runtime are optional.
+4. Start the command-preview window:
 
-For command drafts and local test records:
+   ```powershell
+   py -3 laptop/command_preview_chat.py
+   ```
 
-```powershell
-py -3 laptop/command_preview_chat.py
-```
+   Or double-click `laptop/Start-CommandPreview.cmd`. Its title explicitly says
+   **Offline command preview — no robot connection**.
+5. For interpretation only, run:
 
-Alternatively, double-click `laptop/Start-CommandPreview.cmd`. The title is
-**Offline command preview — no robot connection**.
+   ```powershell
+   py -3 laptop/offline_chat.py
+   ```
 
-For interpretation only:
+   Or double-click `laptop/Start-OfflineChat.cmd`.
 
-```powershell
-py -3 laptop/offline_chat.py
-```
+Try `Take the next right`, then `Actually, left`. **Record preview** stores a
+local test record only. `Slow down a little` asks whether the controller's
+standard fixed speed step should be used; it never silently converts “a little”
+into a measured speed. Timed/distance stops, pauses, reverse, undo and
+interrupt-with-cancellation are understood where possible but remain unavailable
+for execution.
 
-Alternatively, double-click `laptop/Start-OfflineChat.cmd`. These launchers use
-a locally bundled Python when available, otherwise `py -3`. Codex is not
-required. If a launcher closes immediately, use PowerShell to see its error.
-
-### 4. Try a conversation
-
-1. Enter `Take the next right`.
-2. Enter `Actually, left`. The current turn draft changes.
-3. Click **Record preview**. A local left-turn test record appears.
-4. Enter `Slow down a little`. The app asks whether to substitute the
-   controller's standard speed step.
-5. Answer `Use the standard step` to prepare that draft, or `Cancel` to clear it.
-6. Use **Clear conversation** to reset context, drafts, and local records.
-
-| Request | Preview result |
-| --- | --- |
-| Stop | Drafts stop |
-| Speed up / Slow down | Drafts speed_up / slow_down |
-| Take the next left/right/straight | Drafts turn with that direction; reports route/exit prerequisites |
-| Speed up by 10 percent / A little faster | Clarification before substituting a standard speed step |
-| Stop after two seconds / Stop after 30 cm | Can be interpreted; no executable preview mapping |
-| Stop at the next red line / Stop for five seconds | Can be interpreted; no executable preview mapping |
-| Reverse, undo, interrupt-and-cancel | No executable preview mapping |
-| Negated, ambiguous, or unsupported request | Cannot leave a stale draft recordable |
-| Greetings and thanks | Conversation only; may preserve an existing draft |
-
-Speed steps multiply the current controller speed scale by 1.2 or 0.8, subject
-to limits. They are not measured velocities. Turn previews do not prove that a
-physical exit is available or calibrated. Recording consumes the draft and
-preserves earlier records. Cancel clears the unrecorded draft/discussion; it
-does not cancel robot movement.
-
-### 5. Run chatbot tests
-
-From the repository root in PowerShell:
+Run the Windows chatbot checks with:
 
 ```powershell
 py -3 -X utf8 tests/test_offline_interpreter.py
@@ -156,314 +106,168 @@ py -3 -X utf8 tests/test_command_preview.py
 py -3 -X utf8 tests/test_chat.py
 ```
 
-Each should finish with `OK`. GUI tests require Tk and a desktop session.
-`-X utf8` avoids Windows encoding errors when tests read source files.
-The companion tests mock API responses; no API key is needed. The offline
-window checks block network access and imports of connected code.
+## Local ROS package build
 
-## Setup B: robot-code development without a bot
-
-Skip this section if you only need the offline apps. Robot development uses
-Ubuntu and Docker. The container supplies ROS, OpenCV, NumPy, and Duckietown
-packages. Installation/builds need internet; the test containers below have
-networking disabled.
-
-### 1. Set up Ubuntu 22.04
-
-On Windows, open **PowerShell as Administrator** and install WSL if needed:
+The build uses the exact Duckietown ROS base release observed on duck2, rather
+than the old template's branch-derived Daffy build. Install Docker Desktop with
+Linux containers. From a Windows checkout, build a local laptop-check image:
 
 ```powershell
-wsl --install -d Ubuntu-22.04
+py -3 tools/build_local.py
 ```
 
-Restart if prompted, open Ubuntu, and create your Linux account. Check WSL mode:
+To check that the package also builds against the matching ARM64 base:
 
 ```powershell
-wsl --list --verbose
+py -3 tools/build_local.py --arch arm64v8 --pull
 ```
 
-If Ubuntu-22.04 shows version 1, convert it:
+The script permits only a local Docker endpoint and builds with networking
+disabled. It does not connect to duck2 or deploy an image. For a WSL checkout,
+use the same command from Windows PowerShell through its
+`\\wsl.localhost\\Ubuntu-22.04\\home\\...` path, or first enable Docker Desktop's
+WSL integration.
+
+The default image command starts no application node. For exact inspected
+runtime facts, package details and the deferred live stage, read
+[docs/ROBOT_SETUP.md](docs/ROBOT_SETUP.md). To run isolated regressions, use
+[docs/TESTING.md](docs/TESTING.md).
+
+### Docker and WSL prerequisites
+
+On Windows, install Docker Desktop, select Linux containers, and start it.
+Use its local `desktop-linux` context; do not select a robot Docker endpoint.
+Check the client and server before building:
 
 ```powershell
-wsl --set-version Ubuntu-22.04 2
-```
-
-See [Microsoft's WSL commands](https://learn.microsoft.com/en-us/windows/wsl/basic-commands).
-Native Ubuntu 22.04 can skip WSL and use its own Docker installation.
-
-### 2. Enable Docker
-
-On Windows, install/start Docker Desktop, use Linux containers and the WSL 2
-engine, and enable **Settings -> Resources -> WSL Integration -> Ubuntu-22.04**.
-See [Docker's WSL setup](https://docs.docker.com/desktop/features/wsl/).
-Use this integration rather than installing a second Docker Engine in the same
-WSL distribution.
-
-In the **Ubuntu terminal**, check that client and server work:
-
-```bash
+docker context use desktop-linux
 docker version
-docker run --rm hello-world
 ```
 
-### 3. Create an Ubuntu checkout
+The initial image download requires internet. Build steps run with networking
+disabled; an ARM64 build on an Intel/AMD laptop uses Docker's emulation and
+can take longer. The image tags produced are `altata-duck2:noetic-amd64` and
+`altata-duck2:noetic-arm64v8`. Rebuild after editing package source or launchers.
+These commands do not install ROS on Windows or replace the robot's runtime.
 
-The following commands are **Ubuntu Bash**, not PowerShell. On a new teammate's
-machine:
+WSL is optional for the offline apps and Windows Docker workflow. To create an
+Ubuntu environment, run `wsl --install -d Ubuntu-22.04` in administrator
+PowerShell, restart if requested, and create a Linux user. Enable Docker
+Desktop's **Settings → Resources → WSL Integration → Ubuntu-22.04** if using
+Docker inside Ubuntu. `wsl --list --verbose` should show WSL version 2.
 
-```bash
-sudo apt update
-sudo apt install -y git python3-pip
-mkdir -p ~/duckietown
-cd ~/duckietown
-git clone https://github.com/YOUR-ACCOUNT/YOUR-REPOSITORY.git duckiebot-ros
-cd duckiebot-ros
-chmod +x launchers/*.sh packages/duckie_lane_follower/src/*.py
+For the existing WSL checkout, Windows PowerShell can run the build directly:
+
+```powershell
+py -3 "\\wsl.localhost\Ubuntu-22.04\home\tkezdekbayev\duckietown\duckiebot-ros\tools\build_local.py"
 ```
 
-Replace the GitHub path first. Private repositories require GitHub authentication
-through a supported Git credential method. Alternatively, extract the ZIP into
-this location; ZIP downloads omit Git history. The chmod command restores
-executable permissions after browser uploads/ZIP transfers.
+Teammates must substitute their own Linux username/path. Do not reinstall or
+clone over an existing checkout. The previous `dts devel build` template
+workflow is no longer the project's build procedure.
 
-**If the working checkout already exists, use it instead of cloning over it:**
+### Run the ROS checks from Windows PowerShell
 
-```bash
-cd ~/duckietown/duckiebot-ros
+Set `$repoPath` to the repository's absolute path. For a Windows checkout,
+`(Get-Location).Path` works; for the existing WSL checkout use the UNC path
+shown above, ending at `duckiebot-ros`.
+
+```powershell
+$repoPath = (Get-Location).Path
+docker run --rm --network none --mount "type=bind,source=$repoPath,target=/project,readonly" --entrypoint bash altata-duck2:noetic-amd64 -lc 'source /environment.sh >/dev/null 2>&1; cd /project/tests && python3 -m unittest test_runtime_setup test_lane_follower test_navigation test_obstacles_and_connection test_first_test_readiness test_duck_avoidance test_chat test_offline_interpreter test_command_preview test_obstacle_language'
+docker run --rm --network none --mount "type=bind,source=$repoPath,target=/project,readonly" --entrypoint bash altata-duck2:noetic-amd64 -lc 'source /environment.sh >/dev/null 2>&1; python3 /project/tests/test_ros_transport.py'
 ```
 
-Keep one working checkout per person and exchange changes through GitHub.
-Windows File Explorer can open the WSL checkout at
-`\\wsl.localhost\Ubuntu-22.04\home\YOUR-LINUX-USER\duckietown\duckiebot-ros`.
+Require an exit code of zero (`$LASTEXITCODE` in PowerShell). The second check
+starts a private ROS master and synthetic camera inside the isolated container;
+its wheel messages cannot reach duck2. A missing `/project/tests` directory
+means the mount points to the wrong folder. A Docker connection error means
+Docker Desktop or the selected local context needs checking.
 
-### 4. Build a laptop test image
+## Connect to duck2 for a future live session
 
-For an Intel/AMD laptop, use an explicit local image tag:
+1. Power the robot and laptop hotspot using the robot's existing network
+   configuration. Allow 2–5 minutes for boot. Credentials are not included in
+   the repository.
+2. In Windows PowerShell, run `Test-NetConnection duck2.local -Port 22`.
+   A successful TCP connection confirms reachability, not ROS compatibility.
+3. Use `ssh duckie@duck2.local` with the robot account credentials. Verify an
+   unfamiliar SSH host fingerprint using trusted robot information. Do not
+   disable host-key checking. If the hostname fails, use the robot's current
+   hotspot address; do not assume its previous address is still valid.
+4. From the checkout, `py -3 tools/inspect_robot_setup.py` displays recorded
+   setup facts offline. Add `--connect` for authenticated metadata inspection,
+   or `--connect --host CURRENT_ROBOT_IP` if using an address. This inspector
+   does not subscribe to images or publish wheel commands.
 
-```bash
-docker build --build-arg ARCH=amd64 -t duck2-project:offline .
-```
+Windows SSH was verified on 2026-09-08. WSL hostname resolution failed in that
+session; Docker-to-robot connectivity and a general laptop ROS deployment path
+are not established. The successful live diagnostic ran the project's source
+temporarily inside the robot's existing ROS container, with driving disabled
+and output directed to a diagnostic topic. There is no persistent deployment.
 
-This uses the existing Dockerfile and Daffy ROS base. It is an **amd64 laptop
-test image**, not an ARM robot deployment image. The first build downloads
-dependencies and can take time. Require a successful build before continuing.
-Rebuild after changes to robot source, launchers, or dependencies.
+The node accepts optional `~camera_topic` and `~wheels_topic` parameters;
+defaults are the camera and real wheel interfaces listed above. Using a
+diagnostic wheel topic permits stationary perception checks. The ordinary
+`lane-camera-debug` launcher still publishes zeros to the real wheel topic:
+it is not equivalent to the isolated diagnostic run.
 
-Keep the Dockerfile's `REPO_NAME=duckiebot-ros`: transport tests currently
-expect the internal path `/code/catkin_ws/src/duckiebot-ros`.
+## Verified progress and work remaining
 
-### 5. Run robot checks in isolation
+On 2026-09-08 both architecture builds and a fresh reconstructed local-copy
+build succeeded. The final unit run contained **118 tests: 117 passed and one
+platform-specific test was skipped**. The isolated ROS transport suite passed,
+including camera freshness, shutdown, heartbeat, gateway, recorder and route
+checks. Native Windows GUI checks are a separate command listed above.
 
-From the repository root in Ubuntu, after the build:
+Twelve live camera frames decoded at 640×480 with advancing timestamps; the
+latest observed frame age was 0.028 seconds. The application processed live
+frames during a bounded diagnostic run and reported zero output. This is
+software compatibility evidence, not successful lane following on a track.
 
-```bash
-for suite in test_lane_follower test_navigation test_obstacles_and_connection test_first_test_readiness; do
-  docker run --rm --network none \
-    -v "$PWD:/project:ro" \
-    --entrypoint python3 duck2-project:offline "/project/tests/${suite}.py" || break
-done
-```
+Next work is to verify exclusive wheel control and stopping behaviour, then
+perform secured lifted-wheel checks with a person beside the robot. The
+installed left/right test services were only described, not executed; their
+three-second duration and unverified speed must not be assumed equivalent to
+the planned one-second low-speed pulses. Wheel tests remain pending.
+Afterward, collect course camera samples, calibrate steering and stopping,
+and test short supervised track sections before routes or obstacle passing.
+Automatic passing remains disabled and chatbot previews remain offline.
 
-All four suites should run and report `OK`. They use synthetic images, real
-OpenCV, and mocked ROS interfaces. The loop stops if a suite fails.
+## Important current limits
 
-Then run the actual ROS transport checks without robot connectivity:
+- There is already a `/duck2/kinematics_node` publisher on the robot's wheel
+  topic. A control-handover method must be decided before this controller is
+  ever launched.
+- Do not run a driving launcher or publish to the real wheel topic until duck2
+  is secured with both wheels clear and the team deliberately starts the
+  lifted-wheel stage.
+- Physical colour thresholds, motor response, lane geometry, red-line stopping,
+  obstacle passing and route turns have not been measured on this robot.
+- The offline chatbot and preview window have no network, ROS or robot-delivery
+  path.
 
-```bash
-docker run --rm --network none \
-  -v "$PWD:/project:ro" \
-  --entrypoint bash duck2-project:offline \
-  -lc 'source /environment.sh >/dev/null 2>&1; python3 /project/tests/test_ros_transport.py'
-```
-
-This starts an isolated ROS master and synthetic camera inside the container.
-It checks received wheel messages, timestamp rejection, camera loss, shutdown,
-and existing route/gateway/recorder behaviour. It uses the **built** robot source,
-so a stale image does not test your latest edits.
-
-Older examples in `docs/TESTING.md` use the original local image tag
-`duckietown/template-ros:v3-amd64`. Docker images are not included in a Git clone.
-The explicit tag above avoids depending on a branch-derived image name.
-
-## Setup C: physical testing when duck2 is available
-
-WSL/Docker discovery, ROS connectivity, and GUI forwarding still need checking
-on the actual network. Offline tests do not establish physical readiness.
-
-### 1. Install Duckietown Shell if needed
-
-Inside Ubuntu 22.04:
-
-```bash
-python3 -m pip install --user duckietown-shell
-export PATH="$HOME/.local/bin:$PATH"
-command -v dts
-dts --help
-```
-
-Add the PATH export to `~/.bashrc` if needed in later terminals. Use the course's
-established profile/distribution. This project has a **Daffy ROS base** and
-template format 3. Follow the installed shell's profile prompts/help rather
-than assuming an older `--set-version` flag still exists.
-See [Duckietown Shell installation](https://github.com/duckietown/duckietown-shell).
-
-Check installed build/run options:
-
-```bash
-dts devel build --help
-dts devel run --help
-```
-
-The existing workflow uses `dts devel build -f`. A previous shell run reported
-an unrecognized `v3` distro after packaging an image; see `docs/TESTING.md`.
-Do not treat a nonzero exit as success. Resolve the course profile/image
-configuration and build for the actual execution host before physical testing.
-An amd64 laptop image does not prove an ARM build works.
-
-In the installed tools, `-R duck2` selects the robot to connect to, while `-H`
-selects the Docker host. Selecting a robot does not itself mean the container
-is running on that robot. Verify the course's deployment arrangement.
-
-### 2. Check connectivity and camera
-
-Connect the laptop and powered bot to the course-configured network. In Ubuntu:
-
-```bash
-dts fleet discover
-```
-
-Stop discovery with Ctrl+C after checking for duck2, then:
-
-```bash
-ping -c 4 duck2.local
-```
-
-Confirm expected camera/wheel topics and message types, clock agreement, and
-absence of another active driving controller. Hostname resolution alone is not
-a ROS connectivity test. After building the appropriate image:
-
-```bash
-dts devel run -R duck2 -L lane-camera-debug -X
-```
-
-Inspect masks, lane centre, stop reasons, and actual wheel output while
-stationary. **Camera-debug publishes only zero wheel commands.** The `-X`
-GUI runtime must work on the laptop. Do not switch to a driving launcher to
-work around missing camera windows.
-
-### 3. Lifted-wheel check, then slow track check
-
-Only after camera inspection, secure the bot on a stand with wheels clear:
-
-```bash
-dts devel run -R duck2 -L lane-follow-stand
-```
-
-This enables wheels: base `0.05`, wheel cap `0.07`, steering cap `0.02`.
-Verify wheel/steering direction, lane-loss stopping, and Ctrl+C stopping.
-Once those pass, test a short, supervised track segment:
-
-```bash
-dts devel run -R duck2 -L lane-follow
-```
-
-Road defaults are base `0.08` and cap `0.18`. These are normalized wheel
-commands, **not metres per second**. Ordinary lane-follow mode latches red-line
-stops. Keep Ctrl+C available and measure the bot's stopping distance.
-Follow the [full physical-test checklist](docs/FIRST_TEST_READINESS.md).
-
-### Other launchers and the connected companion
-
-| Launcher | Purpose |
-| --- | --- |
-| lane-record | Camera/status recorder; requires a persistent capture-directory mount |
-| lane-route | Prototype route mode; requires heartbeat, confirmed placement, and junction calibration |
-| lane-chat | Route node plus HTTP gateway; requires a control token and the route prerequisites |
-| default | Original template placeholder; does not start the lane follower |
-
-Both route launchers keep `junctions_calibrated:=false`. Do not enable it before
-measuring junction behaviour.
-
-`laptop/Start-Duck2Chat.cmd` opens the **connected companion**, not an offline
-app. Its direct controls do not need an LLM key, but model-backed conversation
-does. It is outside the current API-free preview workflow. Connection requires
-a running ROS controller/gateway, a reachable URL, and a matching
-`DUCK2_CONTROL_TOKEN`. Do not commit that token or expose the control port to
-the public internet. See [the command interface](docs/COMMAND_INTERFACE.md) and
-[companion guide](laptop/README.md) before using it.
-
-## Work remaining
-
-1. **Collect our own camera evidence:** straights, curves, dashed lines, red
-   approaches, shadows, glare, obstacles, and junction exits.
-2. **Calibrate the physical bot:** colour/ROI settings, steering flip, motor
-   response, stopping distance, and speed caps. Another identical bot's values
-   do not establish our measured performance.
-3. **Validate routes:** confirm map labels and starting pose, measure junction
-   entry/turn/reacquisition, and test failure recovery.
-4. **Improve language coverage:** use actual user examples to add phrases and
-   regression cases; preserve clarification instead of guessing movement.
-5. **Design future live chatbot integration separately:** distinguish delivery,
-   acceptance, and completion; preserve stop/freshness gates; test in isolation
-   before connecting. Offline drafts currently have no live delivery path.
-6. **Defer unsupported controls:** measured-distance/time actions, pauses,
-   reverse, interrupt-with-cancellation, and undo need separate implementation
-   and physical validation. Understanding them is not executing them.
-7. **Finish the handoff:** verify a fresh teammate installation, share the map
-   and selected recordings explicitly, and record software versions and measured
-   calibration values for submission.
-
-## Repository guide
+## Repository layout
 
 ```text
-packages/duckie_lane_follower/src/
-  lane_follower_node.py       Perception, control, navigation, safeguards
-  command_gateway.py         Existing HTTP-to-ROS bridge
-  camera_capture.py          Camera/status recorder
-launchers/                   Duckietown runtime presets
-laptop/
-  offline_interpreter.py     Rule-based interpreter and discussion memory
-  offline_chat.py            Interpretation-only Tk window
-  command_preview.py        Translation and in-memory fake receiver
-  command_preview_chat.py   Offline preview Tk window
-  duck2_chat.py, chat_core.py Existing connected companion
-tests/                       Language, GUI, controller, ROS transport tests
-docs/                        Requirements, interfaces, calibration/test notes
-Dockerfile                   Duckietown ROS build
-dependencies-*.txt           Container dependencies
-.dtproject                   Duckietown project metadata
+config/duck2.json                         Verified non-secret runtime facts
+tools/build_local.py                      Local, pinned-image package build
+tools/inspect_robot_setup.py              Opt-in read-only setup inspector
+packages/duckie_lane_follower/src/        Lane follower, gateway and recorder
+launchers/                                Default-safe and future live presets
+laptop/                                   Offline apps and connected companion
+tests/                                    Offline, synthetic and isolated ROS tests
+docs/                                     Setup, safety, interface and test notes
 ```
 
-Detailed guides:
+Keep credentials, `.env` files, captures and generated build folders out of
+Git. Docker images, Python/WSL installations, chat history and the physical map
+are not included by a normal clone.
 
-- [Offline preview behaviour](laptop/COMMAND_PREVIEW.md)
-- [Interpreter examples and limits](laptop/OFFLINE_CHAT.md)
-- [First-test preparation and unchanged HSV defaults](docs/FIRST_TEST_READINESS.md)
-- [Robot verification results and environment limitations](docs/TESTING.md)
-- [Commands, routes, gateway, and heartbeat](docs/COMMAND_INTERFACE.md)
-- [Camera recording](docs/CAMERA_RECORDING.md)
-- [Project/map assumptions](docs/PROJECT_REQUIREMENTS.md)
-- [External interface references](docs/INTERFACE_REFERENCES.md)
-- [Earlier local-model experiment](docs/LOCAL_MODEL_EXPERIMENT.md)
+## Attribution
 
-## Verification status, sharing, and attribution
-
-Recorded on **2026-09-07**: 35 chatbot test methods passed on Windows, including
-offline GUI lifecycle checks with network access blocked. Robot regression and
-isolated ROS transport results are documented separately in `docs/TESTING.md`.
-These results apply to the tested environment and inputs, not an untested
-physical track. These setup instructions still need a clean-machine handoff check.
-
-Upload source, launchers, dependencies, tests, documentation, and hidden project
-metadata. Exclude credentials, .env, caches, runtime downloads, and generated
-build outputs. Docker images, Python/WSL installations, chat history, and earlier
-chat attachments do not transfer with a clone. Add the map/selected recordings
-explicitly if needed.
-
-This project started from [Duckietown's ROS template](https://github.com/duckietown/template-ros).
-Preserve its licence material in `LICENSE.pdf`. The package manifest currently
-declares MIT; reconcile the project-level licence/attribution before final
-public release rather than assuming this README grants a new licence.
-Other teams were consulted only for hardware/ROS interface facts, documented in
-`docs/INTERFACE_REFERENCES.md`. Their movement/vision implementations and colour
-values were not used for these changes.
+The initial repository was created from Duckietown's ROS template. Its retained
+licence material remains in `LICENSE.pdf`. Current package code and project
+documentation were developed for this team; other teams' code, motion logic and
+colour values were not copied. The external runtime interfaces used here are
+documented in [docs/INTERFACE_REFERENCES.md](docs/INTERFACE_REFERENCES.md).

@@ -91,6 +91,17 @@ class LaneTests(unittest.TestCase):
         self.assertEqual(self.node.wheels_topic, "/duck2/wheels_driver_node/wheels_cmd")
         self.assertEqual(self.hooks, [self.node.on_shutdown])
 
+    def test_diagnostic_topic_override_is_absolute_and_validated(self):
+        self.params["~wheels_topic"] = "/duck2/lane_follower/diagnostic_wheels_cmd"
+        with patch.dict(self.mod.os.environ, VEHICLE_NAME="duck2"):
+            diagnostic_node = self.mod.LaneFollowerNode("diagnostic")
+        self.assertEqual(diagnostic_node.wheels_topic,
+                         "/duck2/lane_follower/diagnostic_wheels_cmd")
+        self.params["~wheels_topic"] = "diagnostic_wheels_cmd"
+        with patch.dict(self.mod.os.environ, VEHICLE_NAME="duck2"):
+            with self.assertRaisesRegex(ValueError, "absolute ROS topic"):
+                self.mod.LaneFollowerNode("invalid-topic")
+
     def test_camera_debug_never_drives(self):
         for _ in range(10):
             self.now += .1

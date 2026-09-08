@@ -101,7 +101,7 @@ geometry and motion/clearance feedback.
 From the repository root in WSL:
 
 ~~~bash
-docker run --rm --network none -v "$PWD:/project:ro" --entrypoint python3 duckietown/template-ros:v3-amd64 /project/tests/test_duck_avoidance.py
+docker run --rm --network none -v "$PWD:/project:ro" --entrypoint python3 altata-duck2:noetic-amd64 /project/tests/test_duck_avoidance.py
 python3 tests/test_obstacle_language.py
 ~~~
 

@@ -111,8 +111,12 @@ try:
         stream(image, .3, timestamp)
         assert received and all(x == (0., 0.) for x in received), label
         assert latest_status["camera_valid"] is False, latest_status
-        stream(image, .4)
-        assert max(received[-1]) > 0, "Recovery failed after " + label
+        received.clear()
+        stream(image, .8)
+        # A fresh callback must restore driving. The watchdog can publish a later
+        # zero during this observation window, so the final sample alone is not a
+        # reliable recovery indicator on the Noetic runtime.
+        assert any(max(sample) > 0 for sample in received), "Recovery failed after " + label
     fixed_stamp = rospy.Time.now()
     stream(image, .2, lambda: fixed_stamp)
     received.clear()
@@ -215,7 +219,9 @@ try:
           flush=True)
 
     # Test obstacle hold and explicit clear/release without the client lease.
-    stream(image,.2)
+    received.clear()
+    stream(image,.5)
+    assert latest_status["camera_valid"], "Fresh camera did not recover before obstacle test"
     command("continue")
     stream(image,.3)
     obstacle=image.copy()

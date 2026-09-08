@@ -1,0 +1,35 @@
+{
+  "vehicle_name": "duck2",
+  "hostname": "duck2.local",
+  "ssh_user": "duckie",
+  "observed_on": "2026-09-08",
+  "robot_arch": "arm64v8",
+  "host_os": "Ubuntu 18.04.6",
+  "ros_distro": "noetic",
+  "python_version": "3.8.10",
+  "opencv_version": "4.2.0",
+  "numpy_version": "1.17.4",
+  "base_images": {
+    "amd64": "duckietown/dt-ros-commons:v4.3.0-amd64@sha256:79aa9db043053e8d78e43bd90c7acd02562bee728b69e8512b4d54e3ec8ad858",
+    "arm64v8": "duckietown/dt-ros-commons:v4.3.0-arm64v8@sha256:739c57ac31ecc7b695f9367c63b72ce3c62acc05df7455efad41492443181e40"
+  },
+  "ros_master_uri": "http://duck2.local:11311/",
+  "camera": {
+    "topic": "/duck2/camera_node/image/compressed",
+    "type": "sensor_msgs/CompressedImage",
+    "md5": "8f7a12909da2c9d3332d540a0977563f"
+  },
+  "wheels": {
+    "topic": "/duck2/wheels_driver_node/wheels_cmd",
+    "type": "duckietown_msgs/WheelsCmdStamped",
+    "md5": "edbf8d24194d839b1982a6a991b552c6"
+  },
+  "observed_wheel_publishers": [
+    "/duck2/kinematics_node"
+  ],
+  "network": {
+    "windows_ssh_verified": true,
+    "wsl_direct_access_verified": false
+  },
+  "live_application_verified": false
+}

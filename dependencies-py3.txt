@@ -1,3 +1,0 @@
-# Intentionally left almost empty.
-# The Duckietown ROS base image normally provides rospy, cv_bridge, duckietown_msgs, cv2, and numpy.
-# Avoid adding opencv-python here unless the build fails, because pip OpenCV can be problematic on ARM robots.

@@ -95,8 +95,12 @@ class LaneFollowerNode(DTROS):
         )
 
         self.vehicle_name = os.environ["VEHICLE_NAME"]
-        self.camera_topic = f"/{self.vehicle_name}/camera_node/image/compressed"
-        self.wheels_topic = f"/{self.vehicle_name}/wheels_driver_node/wheels_cmd"
+        self.camera_topic = self.topic_param(
+            "~camera_topic", f"/{self.vehicle_name}/camera_node/image/compressed"
+        )
+        self.wheels_topic = self.topic_param(
+            "~wheels_topic", f"/{self.vehicle_name}/wheels_driver_node/wheels_cmd"
+        )
 
         self.bridge = CvBridge()
 
@@ -269,6 +273,13 @@ class LaneFollowerNode(DTROS):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError("%s must be a finite number" % name)
         return float(value)
+
+    @staticmethod
+    def topic_param(name, default):
+        value = rospy.get_param(name, default)
+        if type(value) is not str or not value.startswith("/") or any(c.isspace() for c in value):
+            raise ValueError("%s must be an absolute ROS topic name" % name)
+        return value
 
     def validate_settings(self):
         for name in ("drive_enabled", "show_debug", "flip_steering", "route_enabled",

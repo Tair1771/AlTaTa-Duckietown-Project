@@ -1,9 +1,14 @@
-docs/build
-*pyc
+# Python and test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
-# documentation artifacts
-html/*
-!html/HTML_DOCS_WILL_BE_GENERATED_HERE
+# Catkin and Docker development output
+build/
+devel/
+logs/
 
-# otherwise CI thinks index not clean
-*.resolved
+# Local captures and credentials
+captures/
+.env
+*.log
