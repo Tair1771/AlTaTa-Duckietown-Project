@@ -7,8 +7,11 @@ offline app connects to a robot.
 
 The project is matched locally to the ROS runtime installed on duck2. A live
 camera compatibility check succeeded with driving disabled and the wheel output
-redirected to a diagnostic topic. **No real wheel command, calibration,
-deployment or driving test has been performed.**
+redirected to a diagnostic topic. The installed driver completed one
+upside-down left-wheel and one right-wheel hardware check. The project
+controller also completed one bounded, approximately one-second lifted-wheel
+check and one short upright forward check. No persistent deployment or
+autonomous track-driving test has been performed.
 
 ## What is included
 
@@ -174,7 +177,7 @@ shown above, ending at `duckiebot-ros`.
 
 ```powershell
 $repoPath = (Get-Location).Path
-docker run --rm --network none --mount "type=bind,source=$repoPath,target=/project,readonly" --entrypoint bash altata-duck2:noetic-amd64 -lc 'source /environment.sh >/dev/null 2>&1; cd /project/tests && python3 -m unittest test_runtime_setup test_lane_follower test_navigation test_obstacles_and_connection test_first_test_readiness test_duck_avoidance test_chat test_offline_interpreter test_command_preview test_obstacle_language'
+docker run --rm --network none --mount "type=bind,source=$repoPath,target=/project,readonly" --entrypoint bash altata-duck2:noetic-amd64 -lc 'source /environment.sh >/dev/null 2>&1; cd /project/tests && python3 -m unittest test_runtime_setup test_lane_follower test_navigation test_obstacles_and_connection test_first_test_readiness test_bounded_ground_supervisor test_duck_avoidance test_chat test_offline_interpreter test_command_preview test_obstacle_language'
 docker run --rm --network none --mount "type=bind,source=$repoPath,target=/project,readonly" --entrypoint bash altata-duck2:noetic-amd64 -lc 'source /environment.sh >/dev/null 2>&1; python3 /project/tests/test_ros_transport.py'
 ```
 
@@ -186,19 +189,46 @@ Docker Desktop or the selected local context needs checking.
 
 ## Connect to duck2 for a future live session
 
-1. Power the robot and laptop hotspot using the robot's existing network
-   configuration. Allow 2–5 minutes for boot. Credentials are not included in
-   the repository.
-2. In Windows PowerShell, run `Test-NetConnection duck2.local -Port 22`.
-   A successful TCP connection confirms reachability, not ROS compatibility.
-3. Use `ssh duckie@duck2.local` with the robot account credentials. Verify an
-   unfamiliar SSH host fingerprint using trusted robot information. Do not
-   disable host-key checking. If the hostname fails, use the robot's current
-   hotspot address; do not assume its previous address is still valid.
-4. From the checkout, `py -3 tools/inspect_robot_setup.py` displays recorded
-   setup facts offline. Add `--connect` for authenticated metadata inspection,
-   or `--connect --host CURRENT_ROBOT_IP` if using an address. This inspector
-   does not subscribe to images or publish wheel commands.
+Use Windows PowerShell for duck2 management. The previous WSL hostname route
+was not reliable. Power the robot and laptop hotspot, then allow 2–5 minutes
+for boot.
+
+Once, while duck2 is reachable, run this from Windows PowerShell in the
+checkout:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\setup_duck2_ssh.ps1
+```
+
+The script creates a protected key at `%USERPROFILE%\.ssh\duck2_ed25519`,
+asks you to enter its passphrase privately, uses the existing robot password
+once to install only the public key, and verifies key-based login. It never
+stores a password or IP address in the repository. If Windows asks for
+administrator access to start the OpenSSH Authentication Agent, start that
+service in an elevated PowerShell, rerun the script, and unlock the key using:
+
+```powershell
+ssh-add $env:USERPROFILE\.ssh\duck2_ed25519
+```
+
+Afterward, double-click `tools\Start-Duck2-Check.cmd`, or run:
+
+```powershell
+py -3 tools\inspect_robot_setup.py --connect --save-summary
+```
+
+This is the short, read-only check. It resolves duck2, verifies the saved host
+identity and key login, checks essential containers and ROS master availability,
+and reports the normal wheel publisher. It does not subscribe to images,
+publish messages or call motor services. The non-secret dated summary is saved
+under `%LOCALAPPDATA%\Duck2\connection-checks`, outside the repository.
+Use `--full` only after a runtime change or when a full compatibility record
+is needed.
+
+If the robot address changes, the alias still resolves through `duck2.local`.
+An unfamiliar host key is a stop condition; do not bypass it. A locked-key,
+name-resolution, network or login failure gives one targeted next step and
+does not retry automatically.
 
 Windows SSH was verified on 2026-09-08. WSL hostname resolution failed in that
 session; Docker-to-robot connectivity and a general laptop ROS deployment path
@@ -209,13 +239,14 @@ and output directed to a diagnostic topic. There is no persistent deployment.
 The node accepts optional `~camera_topic` and `~wheels_topic` parameters;
 defaults are the camera and real wheel interfaces listed above. Using a
 diagnostic wheel topic permits stationary perception checks. The ordinary
-`lane-camera-debug` launcher still publishes zeros to the real wheel topic:
-it is not equivalent to the isolated diagnostic run.
+`lane-camera-debug` launcher redirects output to
+`/duck2/lane_follower/diagnostic_wheels_cmd`, disables driving and disables the
+optional obstacle/avoidance functions.
 
 ## Verified progress and work remaining
 
 On 2026-09-08 both architecture builds and a fresh reconstructed local-copy
-build succeeded. The final unit run contained **118 tests: 117 passed and one
+build succeeded. The final unit run contained **132 tests: 131 passed and one
 platform-specific test was skipped**. The isolated ROS transport suite passed,
 including camera freshness, shutdown, heartbeat, gateway, recorder and route
 checks. Native Windows GUI checks are a separate command listed above.
@@ -225,25 +256,37 @@ latest observed frame age was 0.028 seconds. The application processed live
 frames during a bounded diagnostic run and reported zero output. This is
 software compatibility evidence, not successful lane following on a track.
 
-Next work is to verify exclusive wheel control and stopping behaviour, then
-perform secured lifted-wheel checks with a person beside the robot. The
-installed left/right test services were only described, not executed; their
-three-second duration and unverified speed must not be assumed equivalent to
-the planned one-second low-speed pulses. Wheel tests remain pending.
-Afterward, collect course camera samples, calibrate steering and stopping,
-and test short supervised track sections before routes or obstacle passing.
+The installed left/right driver checks and a bounded project-controller
+lifted-wheel check succeeded. Subsequent supervised ground checks confirmed
+positive forward motion, prompt stopping and roughly straight travel from a
+centred start at the test-only `0.05` wheel-speed cap. The checked supervisor
+has since performed several short and long ground windows, restoring normal
+control after each run. It is a temporary diagnostic tool, not a deployment
+launcher or evidence of reliable autonomous driving.
+
+Track trials showed that the existing camera settings can temporarily lose the
+yellow divider and enter the white-only fallback on a left curve. The follower
+continued to request left steering, but the robot later approached the white
+border. The installed motor driver maps small normalized commands to similar
+minimum PWM values, so the requested left/right difference may not produce a
+large physical turn. Steering calibration, curve reliability, red-line
+behaviour, obstacle avoidance, routes and reverse remain unverified.
 Automatic passing remains disabled and chatbot previews remain offline.
 
 ## Important current limits
 
-- There is already a `/duck2/kinematics_node` publisher on the robot's wheel
-  topic. A control-handover method must be decided before this controller is
-  ever launched.
-- Do not run a driving launcher or publish to the real wheel topic until duck2
-  is secured with both wheels clear and the team deliberately starts the
-  lifted-wheel stage.
-- Physical colour thresholds, motor response, lane geometry, red-line stopping,
-  obstacle passing and route turns have not been measured on this robot.
+- `/duck2/kinematics_node` normally publishes on the robot's wheel topic. The
+  lifted test used a verified reversible handover by pausing `car-interface`
+  and restoring it after explicit zero and emergency-stop commands.
+- Do not run a ground-driving launcher until duck2 is upright on the track, a
+  person is beside it, and the ground-test preflight is deliberately started.
+- The verified live-management path is Windows OpenSSH using the protected
+  duck2 key. The charging cable may remain connected for tests when its slack
+  is clear of the wheels and track.
+- Existing colour defaults detected both boundaries on straights but entered a
+  white-only fallback during a curve. Colour calibration, curve steering,
+  red-line driving, obstacle passing and route turns still require physical
+  measurement.
 - The offline chatbot and preview window have no network, ROS or robot-delivery
   path.
 

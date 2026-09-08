@@ -1,6 +1,7 @@
 {
   "vehicle_name": "duck2",
   "hostname": "duck2.local",
+  "ssh_alias": "duck2",
   "ssh_user": "duckie",
   "observed_on": "2026-09-08",
   "robot_arch": "arm64v8",

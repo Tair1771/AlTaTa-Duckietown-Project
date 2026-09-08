@@ -1158,7 +1158,14 @@ class LaneFollowerNode(DTROS):
                 self.validate_image(img_bgr)
                 # Detection mutates only this private snapshot until all checks pass.
                 perception = copy.copy(self)
-                perception._duck_boxes = perception.detect_ducks_bgr(img_bgr)
+                # Disabled obstacle handling must not remove yellow divider
+                # pixels from ordinary lane perception. Duck candidates are
+                # only relevant when obstacle handling has been deliberately
+                # enabled for a calibrated session.
+                perception._duck_boxes = (
+                    perception.detect_ducks_bgr(img_bgr)
+                    if perception.obstacle_enabled else []
+                )
                 perception._road_geometry = perception.detect_road_geometry(img_bgr)
                 red_visible = perception.detect_red_stop(img_bgr)
                 lane_error, debug_image, debug_mask = perception.detect_lane_bgr(img_bgr)
@@ -1244,6 +1251,10 @@ class LaneFollowerNode(DTROS):
         self.frame_count += 1
 
     def on_shutdown(self):
+        # DTROS invokes this hook even when construction failed before the
+        # wheel lock exists. There is no publisher to stop in that case.
+        if not hasattr(self, "_wheel_lock"):
+            return
         with self._wheel_lock:
             if self._stopping:
                 return
@@ -1251,7 +1262,7 @@ class LaneFollowerNode(DTROS):
             if self.avoidance_state not in ("idle", "fault"):
                 self.avoidance_fault("Shutdown during passing")
             self.publish_wheels(0.0, 0.0)
-        if self.show_debug:
+        if getattr(self, "show_debug", False):
             cv2.destroyAllWindows()
         rospy.loginfo("LaneFollowerNode stopped; wheels set to zero")
 

@@ -1,6 +1,7 @@
 """First-test readiness checks with synthetic images; never connects to a robot."""
 import threading
 import unittest
+from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import patch
 
@@ -10,6 +11,20 @@ from test_lane_follower import LaneTests
 
 
 class ReadinessTests(LaneTests):
+    def test_live_launchers_keep_unverified_features_out_of_first_tests(self):
+        root = Path(__file__).resolve().parents[1]
+        camera = (root / "launchers/lane-camera-debug.sh").read_text()
+        stand = (root / "launchers/lane-follow-stand.sh").read_text()
+        road = (root / "launchers/lane-follow.sh").read_text()
+        self.assertIn("_drive_enabled:=false", camera)
+        self.assertIn("_wheels_topic:=/${VEHICLE_NAME}/lane_follower/diagnostic_wheels_cmd", camera)
+        for launcher in (camera, stand, road):
+            self.assertIn("_obstacle_enabled:=false", launcher)
+            self.assertIn("_avoidance_enabled:=false", launcher)
+        self.assertIn("_base_speed:=0.05", stand)
+        self.assertIn("_max_speed:=0.07", stand)
+        self.assertIn("_max_steering:=0.02", stand)
+
     def test_invalid_parameters_fail_before_subscribing(self):
         bad = {
             "drive_enabled": ["false", 1], "show_debug": ["true"],
@@ -45,6 +60,15 @@ class ReadinessTests(LaneTests):
         with patch.dict(self.mod.os.environ, VEHICLE_NAME="duck2"):
             other = self.mod.LaneFollowerNode("custom")
         self.assertEqual(other.yellow_lower.tolist(), [25, 145, 125])
+
+    def test_disabled_obstacle_handling_does_not_mask_lane_dividers(self):
+        self.node.obstacle_enabled = False
+        self.node.drive_enabled = False
+        with patch.object(self.node, "detect_ducks_bgr") as detect_ducks:
+            self.now += .1
+            self.deliver(self.image())
+        detect_ducks.assert_not_called()
+        self.assertEqual(self.node._duck_boxes, [])
 
     def test_invalid_stamps_cannot_refresh_or_advance_state(self):
         self.node.drive_enabled = True

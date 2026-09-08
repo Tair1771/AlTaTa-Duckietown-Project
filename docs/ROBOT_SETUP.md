@@ -30,7 +30,8 @@ physical driving work that remains for the course track.
 wheel driver subscribes to that topic and exposes the built-in left/right test
 services. Their verified instructions require the Duckiebot to be upside down
 with both wheels clear; each test spins one wheel for about three seconds.
-Those services were inspected but not run.
+Both services were later run once and returned success. The user observed the
+corresponding individual wheel rotations for about three seconds.
 
 The camera was passively subscribed and twelve current frames decoded as
 640x480 JPEG images with monotonically increasing timestamps. The current node
@@ -40,8 +41,13 @@ seconds with `drive_enabled:=false` and
 frames, reported zero left/right values and shut down cleanly. It never
 published to the real wheel topic.
 
-No calibration was changed. No real wheel command, including a zero command,
-was sent. No installed container was replaced or configured to start an
+No calibration was changed. The installed driver ran one bounded left-wheel and
+one bounded right-wheel test while duck2 was upside down. A later bounded
+project-controller test used the real wheel interface for about one second at
+the stand limits, after pausing `car-interface` for exclusive ownership. Both
+encoders responded, Ctrl+C and the final driver feedback were zero, and the
+user saw both wheels rotate and stop. Direction was not observed. The installed
+container was restored healthy; nothing was replaced or configured to start an
 application automatically.
 
 ## Local package build
@@ -69,17 +75,28 @@ it neither contacts duck2 nor deploys an image. If the checkout is inside WSL,
 run the same command with its `\\wsl.localhost\\...` path from Windows PowerShell,
 or configure Docker Desktop’s WSL integration first.
 
-## Deferred live work
+## Current live-test status
 
-The live image shows a desk rather than the course, so its lane/obstacle result
-is not calibration evidence. Colour/ROI calibration, wheel direction, motor
-response, braking distance, red-line stopping, route timing and obstacle
-passing remain unverified.
+Windows OpenSSH with the protected duck2 key is the verified management path.
+The hotspot/SSH setup is documented in the root README. The charging cable was
+present for later ground comparisons and did not visibly change the robot's
+short forward response; it may remain connected when its slack is clear of the
+wheels and track.
 
-Before the next wheel session, establish exclusive wheel control and verify
-driver stopping behaviour. The installed three-second hardware tests have not
-had their speed or implementation checked and must not automatically replace
-the planned one-second, low-speed pulses. Any rotation requires the user to
-confirm duck2 is secured with both wheels clear and they are beside it.
-Do not run this project's driving launcher until those checks pass and a safe
-handover from the existing kinematics controller has been established.
+The bounded lifted-wheel project test established a reversible control handover,
+encoder response and software stopping. Later upright checks confirmed forward
+motion and prompt stops at a test-only wheel cap of `0.05`; the normal
+`car-interface` container was restored healthy after every run.
+
+The installed driver applies minimum PWM values. In its source, normalized
+commands of `0.03` and `0.05` map to PWM values 65 and 69 respectively, so
+they can rotate the wheels at very similar power. This is relevant to curve
+tests: the follower requested sustained left steering, but a small numerical
+wheel difference did not guarantee a strong physical turn.
+
+On a left curve, the current image processing sometimes used the white-only
+fallback because the yellow dashed divider was absent from the camera mask.
+The robot initially followed the curve but later approached the white border
+during a long supervised run. This is not reliable curve following. Colour/ROI
+calibration, steering trim, braking distance, red-line stopping, route timing,
+obstacle passing and reverse remain unverified.
