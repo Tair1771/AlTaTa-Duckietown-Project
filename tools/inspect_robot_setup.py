@@ -15,10 +15,12 @@ import re
 import socket
 import subprocess
 import sys
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 QUICK_REMOTE = r'''
 import subprocess
+import re
 
 def run(args):
     result = subprocess.run(args, stdout=subprocess.PIPE,
@@ -32,12 +34,34 @@ def run(args):
 print("CHECK: hostname")
 print(run(["hostname"]))
 print("CHECK: essential containers")
-print(run(["docker", "ps", "--format", "{{.Names}} {{.Image}} {{.Status}}"]))
+containers = run(["docker", "ps", "--format", "{{.Names}} {{.Image}} {{.Status}}"])
+print(containers)
+names = {line.split()[0] for line in containers.splitlines() if line.strip()}
+required = {"ros", "duckiebot-interface", "car-interface"}
+if not required.issubset(names):
+    raise SystemExit("Missing running containers: " + str(sorted(required - names)))
+for identity in run(["docker", "inspect", "--format", "{{.Name}} {{.Image}}"] + sorted(required)).splitlines():
+    print("RUNTIME_ID", identity)
 print("CHECK: ROS master and normal wheel publisher")
-print(run(["docker", "exec", "ros", "bash", "-lc",
-           "source /environment.sh >/dev/null 2>&1; "
-           "rosnode list | grep -E '^/duck2/(camera_node|kinematics_node|wheels_driver_node)$'; "
-           "rostopic info /duck2/wheels_driver_node/wheels_cmd"]))
+def ros(command):
+    return run(["docker", "exec", "ros", "bash", "-lc",
+                "set -eo pipefail; source /environment.sh >/dev/null 2>&1; " + command])
+nodes = set(ros("rosnode list").splitlines())
+required_nodes = {"/duck2/" + name for name in
+                  ("camera_node", "kinematics_node", "wheels_driver_node")}
+if not required_nodes.issubset(nodes):
+    raise SystemExit("Missing ROS nodes: " + str(sorted(required_nodes - nodes)))
+for topic, expected in [("/duck2/wheels_driver_node/wheels_cmd", "duckietown_msgs/WheelsCmdStamped"),
+                        ("/duck2/camera_node/image/compressed", "sensor_msgs/CompressedImage")]:
+    actual = ros("rostopic type " + topic)
+    if actual != expected:
+        raise SystemExit("Unexpected topic type: " + topic + " " + actual)
+wheel_info = ros("rostopic info /duck2/wheels_driver_node/wheels_cmd")
+print(wheel_info)
+publisher_section = wheel_info.split("Publishers:", 1)[-1].split("Subscribers:", 1)[0]
+publishers = set(re.findall(r"^\s*\*\s+(\S+)", publisher_section, re.MULTILINE))
+if publishers != {"/duck2/kinematics_node"}:
+    raise SystemExit("Unexpected wheel publishers: " + str(sorted(publishers)))
 '''
 
 FULL_REMOTE = QUICK_REMOTE + r'''
@@ -45,7 +69,7 @@ print("CHECK: runtime and message definitions")
 print(run(["uname", "-m"]))
 print(run(["cat", "/etc/os-release"]))
 print(run(["docker", "exec", "ros", "bash", "-lc",
-           "source /environment.sh >/dev/null 2>&1; rosversion -d; "
+           "set -eo pipefail; source /environment.sh >/dev/null 2>&1; rosversion -d; "
            "rosmsg md5 sensor_msgs/CompressedImage; "
            "rosmsg md5 duckietown_msgs/WheelsCmdStamped; "
            "rostopic info /duck2/camera_node/image/compressed"]))
@@ -108,7 +132,10 @@ def cache_directory():
 
 
 def runtime_fingerprint(output):
-    containers = [line for line in output.splitlines()
+    identities = [line for line in output.splitlines() if line.startswith("RUNTIME_ID ")]
+    if identities:
+        return hashlib.sha256("\n".join(sorted(identities)).encode()).hexdigest()
+    containers = [" ".join(line.split()[:2]) for line in output.splitlines()
                   if line.startswith(("ros ", "duckiebot-interface ", "car-interface "))]
     return hashlib.sha256("\n".join(sorted(containers)).encode()).hexdigest()
 
@@ -128,8 +155,8 @@ def save_summary(host, addresses, mode, output):
     directory.mkdir(parents=True, exist_ok=True)
     fingerprint = runtime_fingerprint(output)
     prior = previous_fingerprint(directory)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = directory / (stamp + ".json")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    path = directory / (stamp + "-" + uuid.uuid4().hex + ".json")
     path.write_text(json.dumps({
         "checked_at_utc": stamp,
         "host": host,

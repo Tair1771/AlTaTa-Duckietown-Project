@@ -2,6 +2,10 @@
 
 import importlib.util
 import math
+import os
+import time
+import subprocess
+import sys
 from pathlib import Path
 import unittest
 
@@ -26,6 +30,31 @@ class FakeClock:
 
 
 class GroundSupervisorTests(unittest.TestCase):
+    def test_watchdog_readiness_survives_batched_log_output(self):
+        child = subprocess.Popen([sys.executable, "-c",
+            "print('startup log\\nWATCHDOG_READY', flush=True)"], stdout=subprocess.PIPE,
+            universal_newlines=True)
+        try:
+            MODULE.wait_for_watchdog(child, timeout=2.)
+        finally:
+            child.wait(timeout=2.)
+            child.stdout.close()
+
+    def test_parent_eof_after_go_stops_without_waiting_for_deadline(self):
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        with os.fdopen(read_fd) as stream:
+            started = time.monotonic()
+            self.assertEqual(MODULE.watch_parent(stream, started + 5), "PARENT_LOST")
+            self.assertLess(time.monotonic() - started, 1.)
+
+    def test_old_or_pre_stop_zeros_do_not_confirm_stop(self):
+        zeros = [(1 + i*.01, 0., 0.) for i in range(8)]
+        self.assertFalse(MODULE.latest_samples_zero(zeros, now=2))
+        self.assertFalse(MODULE.latest_samples_zero(zeros, after=1.08, now=1.1))
+        self.assertTrue(MODULE.latest_samples_zero(zeros, after=1, now=1.1))
+        self.assertFalse(MODULE.latest_samples_zero(zeros[:-1]+[(1.08, math.nan, 0)], now=1.1))
+
     def test_conservative_limits_are_accepted(self):
         MODULE.validate_limits(8.0, 0.05, 0.05, 0.02)
 

@@ -66,13 +66,24 @@ def summarize_samples(samples, released_at, stopped_at):
     }
 
 
-def latest_samples_zero(samples, count=8):
+def latest_samples_zero(samples, count=8, after=None, now=None, max_age=0.5):
     """Require recent driver feedback to confirm the completed stop sequence."""
-    recent = samples[-count:]
+    recent = [s for s in samples if after is None or s[0] >= after][-count:]
     return len(recent) == count and all(
-        abs(left) <= 1e-7 and abs(right) <= 1e-7
-        for _, left, right in recent
+        math.isfinite(left) and math.isfinite(right)
+        and abs(left) <= 1e-7 and abs(right) <= 1e-7
+        and (now is None or 0 <= now - stamp <= max_age)
+        for stamp, left, right in recent
     )
+
+
+def watch_parent(stream, deadline):
+    """Monitor pipe EOF until deadline, including after GO (parent death)."""
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([stream], [], [], min(.02, max(0, deadline-time.monotonic())))
+        if ready and os.read(stream.fileno(), 1) == b"":
+            return "PARENT_LOST"
+    return "AT_DEADLINE"
 
 
 def ros_types():
@@ -134,19 +145,38 @@ def watchdog_main(args):
         publish_stop(rospy, BoolStamped, WheelsCmdStamped, stop, wheels)
         print("WATCHDOG_STOPPED_PARENT_LOST", flush=True)
         return 2
-    wait_until(time.monotonic() + args.watchdog_delay)
+    deadline = time.monotonic() + args.watchdog_delay
+    print("WATCHDOG_ARMED", flush=True)
+    reason = watch_parent(sys.stdin, deadline)
     publish_stop(rospy, BoolStamped, WheelsCmdStamped, stop, wheels)
-    print("WATCHDOG_STOPPED_AT_DEADLINE", flush=True)
+    print("WATCHDOG_STOPPED_" + reason, flush=True)
     return 0
 
 
-def wait_for_watchdog(watchdog, timeout=8.0):
-    ready, _, _ = select.select([watchdog.stdout], [], [], timeout)
-    if not ready:
-        raise RuntimeError("Independent stop watchdog did not become ready")
-    line = watchdog.stdout.readline().strip()
-    if line != "WATCHDOG_READY":
-        raise RuntimeError("Independent stop watchdog failed: {}".format(line))
+def wait_for_watchdog(watchdog, timeout=8.0, expected="WATCHDOG_READY"):
+    deadline = time.monotonic() + timeout
+    pending = bytearray()
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([watchdog.stdout], [], [], max(0, deadline-time.monotonic()))
+        if not ready:
+            break
+        # Do not mix select() with TextIOWrapper read-ahead: a log line and
+        # READY may arrive in one write, leaving READY buffered off the fd.
+        chunk = os.read(watchdog.stdout.fileno(), 1)
+        if not chunk:
+            raise RuntimeError("Independent stop watchdog closed its output")
+        pending.extend(chunk)
+        if len(pending) > 16384:
+            raise RuntimeError("Independent stop watchdog output exceeded protocol limit")
+        if chunk != b"\n":
+            continue
+        line = pending.decode("utf8", errors="replace").strip()
+        pending.clear()
+        if line == expected:
+            return
+        if not line or line.startswith("WATCHDOG_STOPPED"):
+            raise RuntimeError("Independent stop watchdog failed: {}".format(line))
+    raise RuntimeError("Independent stop watchdog did not become ready")
 
 
 def supervisor_main(args):
@@ -173,7 +203,9 @@ def supervisor_main(args):
                      lambda m: right_ticks.append(int(m.data)), queue_size=100)
     def status_callback(message):
         try:
-            statuses.append(json.loads(message.data))
+            value = json.loads(message.data)
+            if isinstance(value, dict):
+                statuses.append((time.monotonic(), value))
         except (TypeError, ValueError):
             pass
     rospy.Subscriber("/{}/lane_follower/status".format(args.vehicle), String,
@@ -211,7 +243,7 @@ def supervisor_main(args):
         while time.monotonic() < deadline:
             state = rosgraph.Master(rospy.get_name()).getSystemState()
             topic_publishers = dict(state[0]).get(wheel_topic, [])
-            valid_status = statuses and statuses[-1].get("camera_valid")
+            valid_status = statuses and time.monotonic()-statuses[-1][0] < .5 and statuses[-1][1].get("camera_valid")
             lane_ready = any(abs(left) > 1e-7 or abs(right) > 1e-7
                              for _, left, right in requested)
             if "/lane_follower_node" in topic_publishers and valid_status and lane_ready:
@@ -222,14 +254,13 @@ def supervisor_main(args):
         expected = {rospy.get_name(), "/lane_follower_node"}
         if set(topic_publishers) != expected:
             raise RuntimeError("Wheel topic is not exclusive: {}".format(topic_publishers))
-        if not statuses or not statuses[-1].get("camera_valid"):
+        if not statuses or time.monotonic()-statuses[-1][0] >= .5 or not statuses[-1][1].get("camera_valid"):
             raise RuntimeError("No valid camera status before release")
-        if statuses[-1].get("red_stop") or statuses[-1].get("lane_error") is None:
+        if statuses[-1][1].get("red_stop") or statuses[-1][1].get("lane_error") is None:
             raise RuntimeError("Scene is not suitable for a straight ground check")
         if not executed:
             raise RuntimeError("No executed-wheel feedback during stopped preflight")
-        if any(abs(left) > 1e-7 or abs(right) > 1e-7
-               for _, left, right in executed[-8:]):
+        if not latest_samples_zero(executed, now=time.monotonic()):
             raise RuntimeError("Emergency stop did not hold zero during preflight")
 
         if args.preflight_only:
@@ -249,10 +280,22 @@ def supervisor_main(args):
         wait_for_watchdog(watchdog)
         watchdog.stdin.write("GO\n")
         watchdog.stdin.flush()
+        wait_for_watchdog(watchdog, timeout=1.0, expected="WATCHDOG_ARMED")
+        if watchdog.poll() is not None or lane.poll() is not None:
+            raise RuntimeError("A child exited before release")
+        if (not statuses or time.monotonic()-statuses[-1][0] >= .5
+                or not statuses[-1][1].get("camera_valid")
+                or statuses[-1][1].get("red_stop")
+                or statuses[-1][1].get("lane_error") is None
+                or not latest_samples_zero(executed, now=time.monotonic())):
+            raise RuntimeError("Preflight became stale while arming watchdog")
 
         released_at = time.monotonic()
         publish_estop(rospy, BoolStamped, stop, False)
-        wait_until(released_at + args.duration)
+        while time.monotonic() < released_at + args.duration:
+            if watchdog.poll() is not None or lane.poll() is not None:
+                raise RuntimeError("A child exited during motion")
+            time.sleep(.01)
         stopped_at = time.monotonic()
         publish_stop(rospy, BoolStamped, WheelsCmdStamped, stop, wheels)
         print("MOTION_STOPPED", flush=True)
@@ -261,6 +304,11 @@ def supervisor_main(args):
         lane.wait(timeout=8)
         time.sleep(0.35)
         publish_stop(rospy, BoolStamped, WheelsCmdStamped, stop, wheels)
+        verification_deadline = time.monotonic() + 2.0
+        while not latest_samples_zero(executed, after=stopped_at, now=time.monotonic()):
+            if time.monotonic() >= verification_deadline:
+                raise RuntimeError("Stop unconfirmed: missing fresh post-stop feedback")
+            publish_stop(rospy, BoolStamped, WheelsCmdStamped, stop, wheels, repeats=1)
         summary = summarize_samples(executed, released_at, stopped_at)
         summary.update({
             "requested_duration_s": args.duration,
@@ -269,9 +317,9 @@ def supervisor_main(args):
                                    if len(left_ticks) > 1 else None),
             "right_encoder_delta": (right_ticks[-1] - right_ticks[0]
                                     if len(right_ticks) > 1 else None),
-            "camera_valid": bool(statuses and statuses[-1].get("camera_valid")),
-            "lane_diagnostic": statuses[-1].get("lane_diagnostic") if statuses else None,
-            "final_feedback_all_zero": latest_samples_zero(executed),
+            "camera_valid": bool(statuses and time.monotonic()-statuses[-1][0] < .5 and statuses[-1][1].get("camera_valid")),
+            "lane_diagnostic": statuses[-1][1].get("lane_diagnostic") if statuses else None,
+            "final_feedback_all_zero": latest_samples_zero(executed, after=stopped_at, now=time.monotonic()),
         })
         print(json.dumps(summary, sort_keys=True), flush=True)
         if not summary["final_feedback_all_zero"]:
@@ -326,6 +374,9 @@ def main(argv=None):
         if not 0 < args.watchdog_delay <= MAX_DURATION + WATCHDOG_MARGIN:
             raise ValueError("Invalid watchdog delay")
         return watchdog_main(args)
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt("Supervisor interrupted; stopping")
+    signal.signal(signal.SIGTERM, interrupted)
     return supervisor_main(args)
 
 

@@ -19,6 +19,40 @@ import inspect_robot_setup
 
 
 class SetupTests(unittest.TestCase):
+    def test_quick_check_rejects_missing_nodes_and_wrong_types_or_publishers(self):
+        def run_case(failure):
+            def fake(args, **kwargs):
+                last = args[-1]
+                if args[0] == "hostname":
+                    output = "duck2"
+                elif args[:2] == ["docker", "ps"]:
+                    output = "ros image Up\nduckiebot-interface image Up\ncar-interface image Up"
+                elif args[:2] == ["docker", "inspect"]:
+                    output = "/ros sha256:abc"
+                elif last.endswith("rosnode list"):
+                    output = "/duck2/camera_node\n/duck2/kinematics_node\n/duck2/wheels_driver_node"
+                    if failure == "node":
+                        output = "/duck2/camera_node"
+                elif "rostopic type" in last:
+                    output = ("sensor_msgs/CompressedImage" if last.endswith("image/compressed")
+                              else "duckietown_msgs/WheelsCmdStamped")
+                    if failure == "type":
+                        output = "std_msgs/String"
+                else:
+                    output = "Publishers:\n * /duck2/kinematics_node (http://robot)\nSubscribers:\n"
+                    if failure == "publisher":
+                        output = "Publishers: None\nSubscribers:\n"
+                return NS(returncode=0, stdout=output)
+            with patch.object(subprocess, "run", side_effect=fake), contextlib.redirect_stdout(io.StringIO()):
+                exec(inspect_robot_setup.QUICK_REMOTE, {})
+        run_case(None)
+        for failure in ("node", "type", "publisher"):
+            with self.subTest(failure=failure), self.assertRaises(SystemExit):
+                run_case(failure)
+
+    def test_uptime_is_not_runtime_identity(self):
+        self.assertEqual(inspect_robot_setup.runtime_fingerprint("ros image-a Up 1 minute"),
+                         inspect_robot_setup.runtime_fingerprint("ros image-a Up 2 hours"))
     def test_pinned_runtime_references(self):
         config=json.loads((ROOT/"config/duck2.json").read_text())
         for ref in config["base_images"].values():
@@ -55,7 +89,7 @@ class SetupTests(unittest.TestCase):
         source=base64.b64decode(payload).decode()
         self.assertEqual(source,inspect_robot_setup.QUICK_REMOTE)
         for forbidden in ("rostopic echo","rostopic pub","rostopic hz","rosrun",
-                          "roslaunch","docker run","docker stop","Subscriber","Publisher"):
+                          "roslaunch","docker run","docker stop","Subscriber(","Publisher("):
             self.assertNotIn(forbidden,source)
         self.assertIn("wheels_cmd",source)
         self.assertIn("universal_newlines=True", source)
