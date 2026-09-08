@@ -1,5 +1,10 @@
 # Testing status
 
+The migration branch's current results and corrected laptop test commands are in
+[SOFTWARE_VERIFICATION.md](SOFTWARE_VERIFICATION.md) and
+[ROS2_READINESS.md](ROS2_READINESS.md). The older results below describe the teammate
+baseline; they are retained as history, not the final branch test count.
+
 ## Offline results — 2026-09-08
 
 The project was rebuilt against the same Duckietown ROS base release observed

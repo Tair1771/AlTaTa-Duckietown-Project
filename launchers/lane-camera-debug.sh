@@ -5,7 +5,8 @@ source /environment.sh
 dt-launchfile-init
 
 # Debug mode: show camera/mask windows, but do NOT drive the wheels.
-# Run this from the laptop with: dts devel run -R ROBOT_NAME -L lane-camera-debug -X
+# Use the pinned-image procedure in docs/ROBOT_SETUP.md (no .dtproject exists).
+# For obstacle diagnostics use lane-obstacle-debug instead.
 rosrun duckie_lane_follower lane_follower_node.py \
     _drive_enabled:=false \
     _show_debug:=true \

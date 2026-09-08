@@ -1,0 +1,18 @@
+duck2_autonomy:
+  ros__parameters:
+    drive_enabled: true  # Requests only: this adapter has no hardware publisher.
+    show_debug: false
+    base_speed: 0.04
+    max_speed: 0.05
+    max_steering: 0.02
+    lost_speed: 0.0
+    junction_speed: 0.04
+    junction_bias: 0.02
+    avoidance_speed: 0.04
+    obstacle_enabled: true
+    avoidance_enabled: false
+    route_enabled: false
+    require_client_heartbeat: true
+duck2_safety:
+  ros__parameters:
+    source_timestamp_verified: false

@@ -1,0 +1,25 @@
+name: Isolated robotics tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ROS 1 application
+        run: docker build -t duck2-ros1:ci .
+      - name: ROS 1 and offline regression (no robot network)
+        run: |
+          docker run --rm --network none -e DT_ENTRYPOINT_SOURCED=1 \
+            -v "$PWD:/code/catkin_ws/src/duckiebot-ros:ro" \
+            -w /code/catkin_ws/src/duckiebot-ros --entrypoint bash duck2-ros1:ci \
+            -lc 'source /code/catkin_ws/devel/setup.bash; python3 -m unittest discover -s tests -v'
+      - name: Build ROS 2 diagnostic application
+        run: docker build -f ros2/Dockerfile -t duck2-ros2:ci .
+      - name: ROS 2 transport and failure injection (no robot network)
+        run: |
+          docker run --rm --network none -v "$PWD:/work:ro" -w /work \
+            -e PYTHONPATH=/work/packages/duckie_lane_follower/src:/work/ros2 \
+            duck2-ros2:ci python3 tests/integration_ros2.py

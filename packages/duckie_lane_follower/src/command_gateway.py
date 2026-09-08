@@ -7,19 +7,24 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import rospy
-from std_msgs.msg import String
+try:
+    import rospy
+    from std_msgs.msg import String
+except ImportError:
+    rospy = None  # ROS 2 supplies its transport explicitly.
 
 class Gateway:
-    def __init__(self, vehicle):
+    def __init__(self, vehicle, runtime=None):
+        self.runtime = runtime if runtime is not None else rospy
+        self.String = runtime.String if runtime is not None else String
         self.condition = threading.Condition()
         self.current = None
         self.updated = 0.0
         self.acks = {}
-        self.publisher = rospy.Publisher(
-            "/%s/lane_follower/command" % vehicle, String, queue_size=10)
-        self.subscriber = rospy.Subscriber(
-            "/%s/lane_follower/status" % vehicle, String, self.receive, queue_size=10)
+        self.publisher = self.runtime.Publisher(
+            "/%s/lane_follower/command" % vehicle, self.String, queue_size=10)
+        self.subscriber = self.runtime.Subscriber(
+            "/%s/lane_follower/status" % vehicle, self.String, self.receive, queue_size=10)
 
     def receive(self, message):
         try:
@@ -51,7 +56,7 @@ class Gateway:
             raise RuntimeError("Lane follower is not connected")
         payload = dict(command, action="heartbeat", id=str(uuid.uuid4()))
         payload.setdefault("issued_at", time.time())
-        self.publisher.publish(String(data=json.dumps(payload, allow_nan=False)))
+        self.publisher.publish(self.String(data=json.dumps(payload, allow_nan=False)))
         return {"forwarded": True}
 
     def send(self, command):
@@ -64,7 +69,7 @@ class Gateway:
             raise RuntimeError("Lane follower is not connected")
         payload = dict(command, id=identifier)
         payload.setdefault("issued_at", time.time())
-        self.publisher.publish(String(data=json.dumps(payload, allow_nan=False)))
+        self.publisher.publish(self.String(data=json.dumps(payload, allow_nan=False)))
         with self.condition:
             deadline = time.monotonic()+3
             while identifier not in self.acks:

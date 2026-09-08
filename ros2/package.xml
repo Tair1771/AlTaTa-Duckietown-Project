@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>duck2_autonomy</name>
+  <version>0.1.0</version>
+  <description>Diagnostic ROS 2 adapter for the shared Duck2 autonomy engine</description>
+  <maintainer email="maintainers@example.invalid">Duck2 project team</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

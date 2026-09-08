@@ -11,6 +11,8 @@ find_package(catkin REQUIRED COMPONENTS
 
 catkin_package()
 
+install(FILES src/duck2_core.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
 catkin_install_python(PROGRAMS
   src/lane_follower_node.py
   src/command_gateway.py

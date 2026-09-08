@@ -4,7 +4,8 @@ source /environment.sh
 
 dt-launchfile-init
 
-# Real lane-following mode. Start with conservative speed values.
+# Legacy lane-only CALIBRATION mode: obstacle handling is deliberately off.
+# Not the final autonomous demo. Prefer the bounded supervisor for ground tests.
 rosrun duckie_lane_follower lane_follower_node.py \
     _drive_enabled:=true \
     _show_debug:=false \

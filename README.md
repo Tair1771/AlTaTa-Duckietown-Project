@@ -1,5 +1,10 @@
 # Duck2: lane following and offline command previews
 
+ROS 2 migration candidate: see [implementation, isolated tests and ordered hardware
+handoff](docs/ROS2_READINESS.md). The shared autonomy engine now has ROS 1 and ROS 2
+adapters; ROS 2 wheel output is deliberately diagnostic-only until physical safety
+and platform compatibility are verified. Existing ROS 1 deployment remains the baseline.
+
 This is the Duck2 university project. It contains a ROS 1 lane follower,
 diagnostic launchers, an interpretation-only offline chatbot and a separate
 offline command-preview window. The chatbot needs no API key and neither

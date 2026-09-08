@@ -7,6 +7,10 @@ __pycache__/
 build/
 devel/
 logs/
+install/
+log/
+evidence/
+recordings/
 
 # Local captures and credentials
 captures/
