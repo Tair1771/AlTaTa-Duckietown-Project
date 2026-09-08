@@ -65,8 +65,48 @@ well inside the node's 0.5-second freshness limit. The exact lane-follower
 source processed those frames with driving disabled and a diagnostic wheel
 topic; its logs reported only zero values and a clean shutdown.
 
-No real wheel command, including a zero command, has been sent. Colour
+No project wheel command, including a real-topic zero command, has been sent. The installed driver tests are recorded below. Colour
 thresholds, steering direction, motor response, braking distance, junction
 timing, obstacle passing and route behaviour remain provisional. Follow
 [FIRST_TEST_READINESS.md](FIRST_TEST_READINESS.md) only after duck2 is secured
 with both wheels clear and the team explicitly begins the wheel-test stage.
+
+## Upside-down bench results — 2026-09-08
+
+duck2 was secured upside down before the installed wheel-driver diagnostics
+were used. Windows SSH access through the hotspot worked with the robot's
+previously verified SSH host key. The ROS master, camera, IMU and front range
+sensor were available. Camera headers advanced at approximately 30 Hz, well
+within the follower's 0.5-second freshness limit.
+
+Before testing, a five-second passive check found no messages on
+`/duck2/wheels_driver_node/wheels_cmd_executed`. The left and right encoder
+topics remained respectively at `0` and `1`, so no motion was being reported.
+`/duck2/kinematics_node` remained the sole publisher of the normal
+`wheels_cmd` topic.
+
+The installed `std_srvs/Trigger` left- and right-wheel test services were
+each called once. Both returned success and reported their own bounded
+parameters: a normalized velocity of `0.5` for `3 s`. The left encoder then
+settled at `844`, and the right encoder settled at `849`; the opposite
+encoder stayed unchanged during each corresponding test. After a further
+five-second passive check, both values were stable and no executed-wheel
+messages appeared.
+
+The driver did not publish `wheels_cmd_executed` feedback during these
+built-in tests. Therefore the service result and encoder change establish the
+driver/encoder interface evidence, but do not replace a person's visual
+confirmation that each wheel rotated in the intended apparent direction and
+stopped. Record that visual observation before treating either wheel direction
+as confirmed for track driving.
+
+The project lane-follower source was also run temporarily on duck2 with
+`drive_enabled:=false`, display disabled and its output remapped to
+`/duck2/lane_follower/diagnostic_wheels_cmd`. It processed live desk-view
+frames, published five observed `0.0/0.0` diagnostic messages, and exited
+cleanly. Its temporary source and process were removed. It did not publish to
+the real wheel topic.
+
+Track-only work remains deferred: stationary track-camera inspection, steering
+direction and trim, ground-contact stopping distance, turns, routes, red-line
+behaviour, obstacle avoidance and every autonomous movement check.
