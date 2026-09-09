@@ -36,9 +36,10 @@ def load_node():
     stubs["sensor_msgs.msg"].CompressedImage = object
     stubs["std_msgs.msg"].String = lambda **kw: NS(**kw)
     path = Path(__file__).resolve().parents[1] / "packages/duckie_lane_follower/src/lane_follower_node.py"
+    source_directory = str(path.parent)
     spec = importlib.util.spec_from_file_location("lane_under_test", path)
     mod = importlib.util.module_from_spec(spec)
-    with patch.dict(sys.modules, stubs):
+    with patch.dict(sys.modules, stubs), patch.object(sys, "path", [source_directory] + sys.path):
         spec.loader.exec_module(mod)
     return mod
 
@@ -116,12 +117,28 @@ class LaneTests(unittest.TestCase):
 
     def test_red_line_geometry_and_both_hue_ranges(self):
         self.assertTrue(self.node.detect_red_stop(self.image(((260, 370), (580, 390)))))
+        self.assertTrue(self.node._red_line_visible)
+        self.assertTrue(self.node._red_line_detection["triggered"])
+        self.assertGreater(self.node._red_line_detection["bottom_fraction"], .8)
         hsv = cv2.cvtColor(self.image(((260, 370), (580, 390))), cv2.COLOR_BGR2HSV)
         hsv[370:391, 260:581, 0] = 179
         self.assertTrue(self.node.detect_red_stop(cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)))
         for box in [((260, 170), (580, 190)), ((270, 350), (290, 430)),
                     ((260, 350), (285, 375)), ((20, 370), (200, 390))]:
             self.assertFalse(self.node.detect_red_stop(self.image(box)), str(box))
+
+    def test_red_line_proximity_threshold_is_separate_from_visibility(self):
+        self.node.red_stop_trigger_bottom_fraction = .85
+        self.assertFalse(
+            self.node.detect_red_stop(self.image(((260, 370), (580, 390)))))
+        self.assertTrue(self.node._red_line_visible)
+        self.assertFalse(self.node._red_line_detection["triggered"])
+        self.assertTrue(
+            self.node.detect_red_stop(self.image(((260, 420), (580, 440)))))
+        self.assertTrue(self.node._red_line_detection["triggered"])
+        status = self.node.status()
+        self.assertEqual(status["red_line_detection"], self.node._red_line_detection)
+        self.assertEqual(status["red_stop_trigger_bottom_fraction"], .85)
 
     def test_stop_latches_even_after_line_leaves_image(self):
         self.node.drive_enabled = True

@@ -81,6 +81,27 @@ class NavigationTests(LaneTests):
         self.node.publish_wheels(.1,.1)
         self.assertEqual(self.speeds(), (0,0))
 
+    def test_route_metadata_must_match_shared_map_and_exact_approaches(self):
+        self.node.route_enabled = True
+        self.node.navigation_state = "awaiting_route"
+        route = ["A", "B", "C"]
+        valid = self.command("set_route", route=route, position_confirmed=True,
+                             map_id="altata-five-junction-v1",
+                             start_approach="A->B", destination_approach="B->C")
+        self.assertTrue(valid["accepted"], valid)
+        status = self.node.status()
+        self.assertEqual(status["start_approach"], "A->B")
+        self.assertEqual(status["destination_approach"], "B->C")
+        self.node.navigation_state = "awaiting_route"
+        for field, value in (("map_id", "wrong-map"),
+                             ("start_approach", "B->A"),
+                             ("destination_approach", "C->B")):
+            command = dict(route=route, position_confirmed=True,
+                           map_id="altata-five-junction-v1",
+                           start_approach="A->B", destination_approach="B->C")
+            command[field] = value
+            self.assertFalse(self.command("set_route", **command)["accepted"])
+
     def test_stop_hold_and_calibration_gate(self):
         self.configure_route()
         self.reach_stop()
@@ -112,6 +133,74 @@ class NavigationTests(LaneTests):
             self.step()
         self.assertEqual(self.node.navigation_state, "following")
         self.assertEqual(self.node.route_index, 2)
+
+    def test_unmarked_reacquisition_continues_selected_profile(self):
+        cases = (
+            (["A", "B", "C"], "straight", "equal"),
+            (["A", "B", "D"], "left", "left"),
+            (["A", "B", "E"], "right", "right"),
+        )
+        for route, turn, expected in cases:
+            with self.subTest(turn=turn):
+                self.setUp()
+                self.configure_route(route)
+                self.enter_crossing()
+                command = None
+                for _ in range(30):
+                    command = self.step(error=None, both=False)
+                    if self.node.navigation_state == "reacquiring":
+                        break
+                self.assertEqual(self.node.navigation_state, "reacquiring")
+                left, right, _ = command
+                self.assertGreater(max(left, right), 0)
+                if expected == "equal":
+                    self.assertAlmostEqual(left, right)
+                elif expected == "left":
+                    self.assertLess(left, right)
+                else:
+                    self.assertGreater(left, right)
+                status = self.node.status()
+                self.assertEqual(status["junction_phase"], "searching")
+                self.assertIsNotNone(status["junction_deadline_remaining_seconds"])
+
+    def test_outgoing_lane_must_be_stable_before_route_advances(self):
+        self.configure_route(["A", "B", "C"])
+        self.enter_crossing()
+        while self.node.navigation_state != "reacquiring":
+            self.step(error=None, both=False)
+        original_index = self.node.route_index
+        for _ in range(2):
+            self.step(error=.1, both=True)
+        self.assertEqual(self.node.route_index, original_index)
+        self.step(error=None, both=False)
+        for _ in range(5):
+            self.step(error=.1, both=True)
+        self.assertEqual(self.node.navigation_state, "following")
+        self.assertEqual(self.node.route_index, original_index + 1)
+        self.assertEqual(self.node._last_junction_result["outcome"], "reacquired")
+
+    def test_normal_lane_loss_still_requests_zero(self):
+        self.configure_route(["A", "B", "C"])
+        self.assertEqual(self.node.navigation_state, "following")
+        self.assertEqual(self.step(error=None, both=False), (0.0, 0.0, 0.0))
+
+    def test_invalid_t_junction_exit_is_rejected(self):
+        self.configure_route(["A", "D", "C"])
+        original = list(self.node.route)
+        result = self.command("turn", value="left")
+        self.assertFalse(result["accepted"])
+        self.assertEqual(self.node.route, original)
+
+    def test_junction_deadline_stops_unmarked_crossing(self):
+        self.configure_route(["A", "B", "C"])
+        self.enter_crossing()
+        self.now = self.node._junction_deadline_at
+        self.node._last_frame_time = self.now
+        self.node._lane_both_visible = False
+        command = self.node.navigation_wheels(None, False)
+        self.assertEqual(command, (0.0, 0.0, 0.0))
+        self.assertEqual(self.node.navigation_state, "fault")
+        self.assertIn("time limit", self.node._fault_reason)
 
     def test_red_never_clears_cannot_finish_junction(self):
         self.configure_route()

@@ -71,6 +71,11 @@ try:
 
     def start(drive, extra=None):
         global child
+        # ROS retains private parameters after process exit. Each scenario
+        # must exercise its own settings rather than inherit the previous one.
+        if rospy.has_param("/lane_follower_node"):
+            rospy.delete_param("/lane_follower_node")
+        latest_status.clear()
         path = "/code/catkin_ws/src/duckiebot-ros/packages/duckie_lane_follower/src/lane_follower_node.py"
         child = subprocess.Popen([sys.executable, path, "_drive_enabled:="+drive,
                                   "_show_debug:=false"] + (extra or []), stdout=log, stderr=subprocess.STDOUT)
@@ -134,8 +139,51 @@ try:
     assert received and received[-1] == (0.,0.), "SIGINT zero message not delivered"
     print("PASS actual ROS: camera timeout, recovery and SIGINT zero delivery", flush=True)
 
+    # Opt-in steering mode must reach the actual ROS node and retain its gates.
+    smooth_flags = ["_smooth_steering_deadband:=true", "_steering_bias:=0.015",
+                    "_k_p:=0.75", "_near_center_k_p:=0.35",
+                    "_full_gain_error:=0.09",
+                    "_min_active_wheel_speed:=0.03",
+                    "_temporal_lane_width_fallback:=true",
+                    "_temporal_lane_width_timeout:=0.3",
+                    "_temporal_yellow_only_timeout:=1.5",
+                    "_boundary_risk_stop:=true",
+                    "_white_boundary_risk_fraction:=0.43"]
+    start("false", smooth_flags)
+    stream(image, .6)
+    assert latest_status.get("smooth_steering_deadband") is True, latest_status
+    assert latest_status.get("k_p") == .75, latest_status
+    assert latest_status.get("near_center_k_p") == .35, latest_status
+    assert latest_status.get("full_gain_error") == .09, latest_status
+    assert latest_status.get("min_active_wheel_speed") == .03, latest_status
+    assert latest_status.get("temporal_lane_width_fallback") is True, latest_status
+    assert latest_status.get("temporal_lane_width_timeout") == .3, latest_status
+    assert latest_status.get("temporal_yellow_only_timeout") == 1.5, latest_status
+    assert latest_status.get("boundary_risk_stop") is True, latest_status
+    assert latest_status.get("white_boundary_risk_fraction") == .43, latest_status
+    assert received and all(x == (0., 0.) for x in received)
+    stop()
+    start("true", smooth_flags)
+    stream(image, .8)
+    assert any(max(x) > 0 for x in received), "Smooth mode never drove"
+    assert "filtered_lane_error" in latest_status and "steering_before_flip" in latest_status
+    time.sleep(.8)
+    assert received[-1] == (0., 0.), "Smooth mode camera timeout failed"
+    received.clear()
+    stream(image, .6)
+    assert any(max(x) > 0 for x in received), "Smooth mode did not recover"
+    received.clear()
+    stop()
+    assert received and received[-1] == (0., 0.), "Smooth mode SIGINT zero not delivered"
+    print("PASS actual ROS: smooth steering opt-in, debug zero, timeout, recovery and SIGINT",
+          flush=True)
+
     start("true")
     stream(image, .8)
+    assert latest_status.get("smooth_steering_deadband") is False, latest_status
+    assert latest_status.get("temporal_lane_width_fallback") is False, latest_status
+    assert latest_status.get("boundary_risk_stop") is False, latest_status
+    assert latest_status["steering_bias"] == 0., latest_status
     red = image.copy()
     cv2.rectangle(red, (260,370), (580,390), (0,0,255), -1)
     stream(red, .4)
@@ -161,7 +209,12 @@ try:
     assert received[-1] == (0.,0.)
     stream(red, 2.1)
     assert latest_status["state"] == "crossing", latest_status
+    assert latest_status["junction_phase"] in ("entry", "turning", "straight"), latest_status
+    received.clear()
     stream(np.zeros_like(image), 3.0)
+    assert received and all(max(sample) > 0 for sample in received), \
+        "Authorized unmarked crossing requested a zero wheel command"
+    assert latest_status["junction_phase"] in ("turning", "straight", "searching"), latest_status
     assert latest_status["route_index"] == 1, latest_status
     stream(image, .8)
     assert latest_status["state"] == "following", latest_status

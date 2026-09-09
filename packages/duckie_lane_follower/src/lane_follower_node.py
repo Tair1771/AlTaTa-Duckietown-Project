@@ -27,64 +27,8 @@ from duckietown.dtros import DTROS, NodeType
 from duckietown_msgs.msg import WheelsCmdStamped
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
-
-
-# Junction ports read from the supplied map. Curved roads can join equal ports.
-MAP_PORTS = {
-    "A": {"N": "D", "E": "B", "S": "E"},
-    "B": {"N": "D", "E": "C", "S": "E", "W": "A"},
-    "C": {"N": "D", "S": "E", "W": "B"},
-    "D": {"N": "A", "S": "C", "W": "B"},
-    "E": {"N": "B", "E": "C", "W": "A"},
-}
-HEADINGS = ("N", "E", "S", "W")
-
-
-def validate_route(route):
-    if not isinstance(route, list) or not 2 <= len(route) <= 50:
-        raise ValueError("Route must contain 2 to 50 junction names")
-    if any(not isinstance(j, str) or j not in MAP_PORTS for j in route):
-        raise ValueError("Unknown map junction")
-    for a, b in zip(route, route[1:]):
-        if b not in MAP_PORTS[a].values():
-            raise ValueError("No road from %s to %s" % (a, b))
-    if any(a == c for a, c in zip(route, route[2:])):
-        raise ValueError("U-turns are not supported")
-    return list(route)
-
-
-def junction_turn(previous, junction, following):
-    entry = next(p for p, j in MAP_PORTS[junction].items() if j == previous)
-    exit_port = next(p for p, j in MAP_PORTS[junction].items() if j == following)
-    incoming = (HEADINGS.index(entry) + 2) % 4
-    delta = (HEADINGS.index(exit_port) - incoming) % 4
-    return {0: "straight", 1: "right", 3: "left"}.get(delta, "uturn")
-
-
-def route_via_turn(route, index, turn):
-    """Change the next junction exit and reconnect to the existing next waypoint."""
-    if index >= len(route) - 1:
-        raise ValueError("The next junction is the route destination")
-    previous, junction, target = route[index-1:index+2]
-    choices = [j for j in MAP_PORTS[junction].values()
-               if j != previous and junction_turn(previous, junction, j) == turn]
-    if not choices:
-        raise ValueError("No %s exit at junction %s" % (turn, junction))
-    exit_junction = choices[0]
-    # Breadth-first search includes the incoming road so it never inserts U-turns.
-    queue = [[junction, exit_junction]]
-    while queue:
-        path = queue.pop(0)
-        if path[-1] == target:
-            candidate = route[:index] + path + route[index+2:]
-            try:
-                return validate_route(candidate)
-            except ValueError:
-                continue
-        for neighbor in MAP_PORTS[path[-1]].values():
-            if neighbor not in path and neighbor != path[-2]:
-                queue.append(path + [neighbor])
-    raise ValueError("Cannot reconnect this turn to the remaining route")
+from duckie_lane_follower.route_map import (
+    MAP_ID, MAP_PORTS, junction_turn, route_via_turn, validate_route)
 
 
 class LaneFollowerNode(DTROS):
@@ -121,8 +65,51 @@ class LaneFollowerNode(DTROS):
 
         self.alpha = self.number_param("~alpha", 0.10)
         self.deadband = self.number_param("~deadband", 0.04)
+        # Opt in only for the bounded camera-guided tests until track verified.
+        self.smooth_steering_deadband = rospy.get_param("~smooth_steering_deadband", False)
         self.k_p = self.number_param("~k_p", 0.20)
+        # Optional gain scheduling keeps small straight-line corrections gentle
+        # while retaining full authority for an established curve. Defaults
+        # preserve the original single-gain controller.
+        self.near_center_k_p = self.number_param("~near_center_k_p", self.k_p)
+        self.full_gain_error = self.number_param("~full_gain_error", self.deadband)
         self.max_steering = self.number_param("~max_steering", 0.08)
+        self.min_active_wheel_speed = self.number_param(
+            "~min_active_wheel_speed", 0.0)
+        self.taper_inner_wheel_floor = rospy.get_param(
+            "~taper_inner_wheel_floor", False)
+        # Opt-in sharp-right corner mode for the bounded physical-test preset.
+        # Ordinary launchers leave it disabled until the state machine has
+        # completed supervised track validation.
+        self.sharp_corner_enabled = rospy.get_param(
+            "~sharp_corner_enabled", False)
+        self.sharp_corner_confirm_seconds = self.number_param(
+            "~sharp_corner_confirm_seconds", 0.20)
+        self.sharp_corner_recent_lane_seconds = self.number_param(
+            "~sharp_corner_recent_lane_seconds", 1.0)
+        self.sharp_corner_approach_seconds = self.number_param(
+            "~sharp_corner_approach_seconds", 0.15)
+        self.sharp_corner_turn_speed = self.number_param(
+            "~sharp_corner_turn_speed", 0.15)
+        self.sharp_corner_min_turn_seconds = self.number_param(
+            "~sharp_corner_min_turn_seconds", 1.0)
+        self.sharp_corner_white_confirm_seconds = self.number_param(
+            "~sharp_corner_white_confirm_seconds", 0.10)
+        self.sharp_corner_pivot_seconds = self.number_param(
+            "~sharp_corner_pivot_seconds", 0.45)
+        self.sharp_corner_relief_seconds = self.number_param(
+            "~sharp_corner_relief_seconds", 0.25)
+        self.sharp_corner_relief_inner_speed = self.number_param(
+            "~sharp_corner_relief_inner_speed", 0.0)
+        self.sharp_corner_max_turn_seconds = self.number_param(
+            "~sharp_corner_max_turn_seconds", 3.5)
+        self.sharp_corner_reacquire_seconds = self.number_param(
+            "~sharp_corner_reacquire_seconds", 0.30)
+        self.sharp_corner_trigger_error = self.number_param(
+            "~sharp_corner_trigger_error", 0.10)
+        self.sharp_corner_exit_error = self.number_param(
+            "~sharp_corner_exit_error", 0.13)
+        self.steering_bias = self.number_param("~steering_bias", 0.0)
         self.max_steering_change = self.number_param("~max_steering_change", 0.004)
 
         # Image-processing parameters copied from the current simulator version.
@@ -131,6 +118,26 @@ class LaneFollowerNode(DTROS):
         self.yellow_right_cutoff = self.number_param("~yellow_right_cutoff", 0.60)
         self.white_left_cutoff = self.number_param("~white_left_cutoff", 0.35)
         self.fallback_lane_width_fraction = self.number_param("~fallback_lane_width_fraction", 0.27)
+        # Test-only opt in: bridge short dashed-line gaps with the most recent
+        # lane width measured while both boundaries were visible.
+        self.temporal_lane_width_fallback = rospy.get_param(
+            "~temporal_lane_width_fallback", False)
+        self.temporal_lane_width_timeout = self.number_param(
+            "~temporal_lane_width_timeout", 0.30)
+        # A sharp right bend can temporarily move only the right white border
+        # outside the image while the yellow centre boundary remains usable.
+        # The default preserves the original symmetric behavior; bounded test
+        # launchers may opt into a longer yellow-only interval.
+        self.temporal_yellow_only_timeout = self.number_param(
+            "~temporal_yellow_only_timeout", self.temporal_lane_width_timeout)
+        # Test-only guard: a lone white boundary near the detector's left
+        # cutoff means the robot is approaching or crossing that border.
+        self.boundary_risk_stop = rospy.get_param("~boundary_risk_stop", False)
+        self.white_boundary_risk_fraction = self.number_param(
+            "~white_boundary_risk_fraction", 0.43)
+        self._lane_half_width_px = None
+        self._lane_half_width_time = None
+        self.lane_target_fraction = self.number_param("~lane_target_fraction", 0.50)
 
         self.filtered_error = 0.0
         self.prev_steering = 0.0
@@ -139,7 +146,14 @@ class LaneFollowerNode(DTROS):
         # A stop stays latched until the route/command layer explicitly releases it.
         self.red_stop_latched = False
         self.red_stop_y_fraction = self.number_param("~red_stop_y_fraction", 0.65)
+        # Keep the existing search region, but expose a separate proximity
+        # threshold. A calibrated test can wait until the line is lower in
+        # the image without treating disappearance as permission to proceed.
+        self.red_stop_trigger_bottom_fraction = self.number_param(
+            "~red_stop_trigger_bottom_fraction", self.red_stop_y_fraction)
         self.red_stop_min_width_fraction = self.number_param("~red_stop_min_width_fraction", 0.18)
+        self._red_line_visible = False
+        self._red_line_detection = None
         self.acceleration_limit = self.number_param("~acceleration_limit", 0.15)
         self._last_control_time = time.monotonic()
         self._last_publish_time = time.monotonic()
@@ -149,6 +163,9 @@ class LaneFollowerNode(DTROS):
         self.junctions_calibrated = rospy.get_param("~junctions_calibrated", False)
         self.route = validate_route(rospy.get_param("~route", ["A", "D", "C", "E", "A"]))
         self.route_index = 1
+        self.route_map_id = MAP_ID
+        self.start_approach = "%s->%s" % tuple(self.route[:2])
+        self.destination_approach = "%s->%s" % tuple(self.route[-2:])
         self.auto_continue = rospy.get_param("~auto_continue", True)
         self.navigation_state = "awaiting_route" if self.route_enabled else "following"
         self.manual_stop = False
@@ -160,6 +177,21 @@ class LaneFollowerNode(DTROS):
         self.junction_reacquire_timeout = self.number_param("~junction_reacquire_timeout", 3.0)
         self.junction_speed = self.number_param("~junction_speed", 0.05)
         self.junction_bias = self.number_param("~junction_bias", 0.025)
+        # Direction-specific settings default to the original shared values.
+        self.junction_left_seconds = self.number_param(
+            "~junction_left_seconds", self.junction_turn_seconds)
+        self.junction_right_seconds = self.number_param(
+            "~junction_right_seconds", self.junction_turn_seconds)
+        self.junction_straight_speed = self.number_param(
+            "~junction_straight_speed", self.junction_speed)
+        self.junction_left_speed = self.number_param(
+            "~junction_left_speed", self.junction_speed)
+        self.junction_right_speed = self.number_param(
+            "~junction_right_speed", self.junction_speed)
+        self.junction_left_bias = self.number_param(
+            "~junction_left_bias", self.junction_bias)
+        self.junction_right_bias = self.number_param(
+            "~junction_right_bias", self.junction_bias)
         self._stop_started = None
         self._crossing_started = None
         self._reacquire_started = None
@@ -167,8 +199,21 @@ class LaneFollowerNode(DTROS):
         self._red_clear_since = None
         self._departed_red = False
         self._active_turn = None
+        self._junction_phase = "idle"
+        self._junction_deadline_at = None
+        self._last_junction_result = None
         self._last_lane_error = None
         self._lane_both_visible = False
+        self._yellow_boundary_visible = False
+        self._white_boundary_visible = False
+        self._sharp_corner_state = "idle"
+        self._sharp_corner_phase = "idle"
+        self._sharp_corner_candidate_since = None
+        self._sharp_corner_state_since = None
+        self._sharp_corner_reacquire_since = None
+        self._sharp_corner_white_since = None
+        self._sharp_corner_last_both_time = None
+        self._sharp_corner_cooldown_until = None
         self._last_command = None
         self._control_epoch = 0
         self.require_client_heartbeat = rospy.get_param("~require_client_heartbeat", False)
@@ -216,7 +261,10 @@ class LaneFollowerNode(DTROS):
         for value in (self.base_speed, self.max_speed, self.acceleration_limit,
                       self.stop_hold_seconds, self.junction_entry_seconds,
                       self.junction_turn_seconds, self.junction_straight_seconds,
-                      self.junction_reacquire_timeout, self.junction_speed, self.junction_bias):
+                      self.junction_left_seconds, self.junction_right_seconds,
+                      self.junction_reacquire_timeout, self.junction_speed,
+                      self.junction_straight_speed, self.junction_left_speed,
+                      self.junction_right_speed):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("Speed and junction settings must be finite and positive")
         if not 0 < self.alpha <= 1:
@@ -283,25 +331,72 @@ class LaneFollowerNode(DTROS):
 
     def validate_settings(self):
         for name in ("drive_enabled", "show_debug", "flip_steering", "route_enabled",
-                     "junctions_calibrated", "auto_continue", "require_client_heartbeat", "obstacle_enabled"):
+                     "junctions_calibrated", "auto_continue", "require_client_heartbeat", "obstacle_enabled",
+                     "smooth_steering_deadband", "temporal_lane_width_fallback",
+                     "boundary_risk_stop", "taper_inner_wheel_floor",
+                     "sharp_corner_enabled"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError("~%s must be a boolean" % name)
         if not 0 < self.base_speed <= self.max_speed <= 1 or self.lost_speed != 0:
             raise ValueError("Require 0 < base_speed <= max_speed <= 1 and lost_speed = 0")
-        if not (0 <= self.deadband < 1 and 0 <= self.k_p <= 1
+        if not 0 <= self.min_active_wheel_speed <= self.base_speed:
+            raise ValueError(
+                "~min_active_wheel_speed must be between zero and base_speed")
+        if not (0 <= self.deadband < 1 and 0 <= self.near_center_k_p <= self.k_p <= 1
+                and self.deadband <= self.full_gain_error < 1
                 and 0 <= self.max_steering <= self.max_speed
+                and abs(self.steering_bias) <= self.max_steering
                 and 0 < self.max_steering_change <= 1 and 0 < self.acceleration_limit <= 1):
             raise ValueError("Invalid steering or acceleration settings")
         if not 0 <= self.roi_y0_fraction < self.roi_y1_fraction <= 1:
             raise ValueError("Require 0 <= roi_y0_fraction < roi_y1_fraction <= 1")
         if not 0 <= self.red_stop_y_fraction < .95:
             raise ValueError("Require 0 <= red_stop_y_fraction < 0.95")
+        if not (self.red_stop_y_fraction
+                <= self.red_stop_trigger_bottom_fraction < .95):
+            raise ValueError(
+                "Require red_stop_y_fraction <= "
+                "red_stop_trigger_bottom_fraction < 0.95")
         for name in ("yellow_right_cutoff", "white_left_cutoff", "fallback_lane_width_fraction",
+                     "lane_target_fraction",
                      "red_stop_min_width_fraction"):
             if not 0 < getattr(self, name) < 1:
                 raise ValueError("~%s must be between 0 and 1" % name)
+        if not 0 < self.temporal_lane_width_timeout <= .5:
+            raise ValueError("~temporal_lane_width_timeout must be in (0, 0.5]")
+        if not 0 < self.temporal_yellow_only_timeout <= 5.0:
+            raise ValueError("~temporal_yellow_only_timeout must be in (0, 5.0]")
+        if not self.white_left_cutoff < self.white_boundary_risk_fraction < 1:
+            raise ValueError(
+                "~white_boundary_risk_fraction must exceed white_left_cutoff and be below 1")
+        if not (0.10 <= self.sharp_corner_confirm_seconds <= 0.50
+                and 0 <= self.sharp_corner_approach_seconds <= 1.0
+                and 0.50 <= self.sharp_corner_recent_lane_seconds <= 1.50
+                and 0 < self.sharp_corner_turn_speed <= self.max_speed
+                and 0 <= self.sharp_corner_min_turn_seconds <= 3.0
+                and 0.05 <= self.sharp_corner_white_confirm_seconds <= 0.30
+                and 0.20 <= self.sharp_corner_pivot_seconds <= 0.75
+                and 0.10 <= self.sharp_corner_relief_seconds <= 0.50
+                and 0 <= self.sharp_corner_relief_inner_speed <= self.base_speed
+                and 0.5 <= self.sharp_corner_max_turn_seconds <= 10.0
+                and 0.20 <= self.sharp_corner_reacquire_seconds <= 1.0
+                and 0 < self.sharp_corner_trigger_error < 1
+                and 0 < self.sharp_corner_exit_error < 0.35):
+            raise ValueError("Invalid sharp-corner settings")
+        if self.sharp_corner_enabled and (self.route_enabled or self.avoidance_enabled):
+            raise ValueError("Sharp-corner test mode cannot be combined with routes or passing")
         if not 0 <= self.junction_bias <= self.junction_speed <= self.max_speed:
             raise ValueError("Require junction_bias <= junction_speed <= max_speed")
+        for turn, speed, bias in (
+                ("left", self.junction_left_speed, self.junction_left_bias),
+                ("right", self.junction_right_speed, self.junction_right_bias)):
+            if not (math.isfinite(bias) and 0 <= bias <= speed
+                    and speed + bias <= self.max_speed):
+                raise ValueError(
+                    "Require junction_%s_bias <= junction_%s_speed and "
+                    "their sum <= max_speed" % (turn, turn))
+        if not self.junction_straight_speed <= self.max_speed:
+            raise ValueError("Require junction_straight_speed <= max_speed")
 
     @staticmethod
     def color_range(name, lower, upper):
@@ -390,6 +485,8 @@ class LaneFollowerNode(DTROS):
         self._lane_both_visible = False
         yellow_x, yellow_y = weighted_center_x(yellow_mask, min_pixels=60)
         white_x, white_y = weighted_center_x(white_mask, min_pixels=100)
+        self._yellow_boundary_visible = yellow_x is not None
+        self._white_boundary_visible = white_x is not None
 
         debug_mask = np.zeros((yellow_mask.shape[0], yellow_mask.shape[1], 3), dtype=np.uint8)
         debug_mask[yellow_mask > 0] = (0, 255, 255)
@@ -399,6 +496,10 @@ class LaneFollowerNode(DTROS):
         cv2.rectangle(debug_image, (0, roi_y0), (w-1, roi_y1-1), (255, 0, 0), 2)
         cv2.rectangle(debug_image, (int(.35*w), int(self.red_stop_y_fraction*h)),
                       (int(.95*w), int(.95*h)), (0, 0, 255), 2)
+        cv2.line(debug_image,
+                 (int(.35*w), int(self.red_stop_trigger_bottom_fraction*h)),
+                 (int(.95*w), int(self.red_stop_trigger_bottom_fraction*h)),
+                 (0, 80, 255), 1)
         for x, y, color in ((yellow_x, yellow_y, (0, 255, 255)),
                             (white_x, white_y, (255, 255, 255))):
             if x is not None:
@@ -409,32 +510,73 @@ class LaneFollowerNode(DTROS):
         if yellow_x is not None and white_x is not None:
             # A reversed or implausibly narrow pair is not an outgoing right lane.
             if white_x - yellow_x < 0.15 * w:
+                self._lane_half_width_px = None
+                self._lane_half_width_time = None
                 self._lane_diagnostic = "Lane lost: reversed or narrow boundaries"
                 return None, debug_image, debug_mask
             self._lane_both_visible = True
             lane_center_x = (yellow_x + white_x) / 2.0
+            half_width = (white_x - yellow_x) / 2.0
+            if self.temporal_lane_width_fallback:
+                self._lane_half_width_px = half_width
+                self._lane_half_width_time = time.monotonic()
         elif yellow_x is not None:
-            self._lane_diagnostic = "Yellow-only fallback"
-            lane_center_x = yellow_x + self.fallback_lane_width_fraction * w
+            use_temporal = (self.temporal_lane_width_fallback
+                            and self._lane_half_width_px is not None
+                            and self._lane_half_width_time is not None
+                            and time.monotonic() - self._lane_half_width_time
+                            <= self.temporal_yellow_only_timeout)
+            if self.temporal_lane_width_fallback and not use_temporal:
+                self._lane_half_width_px = None
+                self._lane_half_width_time = None
+                self._lane_diagnostic = "Lane lost: boundary gap exceeded"
+                return None, debug_image, debug_mask
+            half_width = (self._lane_half_width_px if use_temporal
+                          else self.fallback_lane_width_fraction * w)
+            self._lane_diagnostic = ("Yellow-only temporal fallback" if use_temporal
+                                     else "Yellow-only fallback")
+            lane_center_x = yellow_x + half_width
         elif white_x is not None:
-            self._lane_diagnostic = "White-only fallback"
-            lane_center_x = white_x - self.fallback_lane_width_fraction * w
+            use_temporal = (self.temporal_lane_width_fallback
+                            and self._lane_half_width_px is not None
+                            and self._lane_half_width_time is not None
+                            and time.monotonic() - self._lane_half_width_time
+                            <= self.temporal_lane_width_timeout)
+            if self.temporal_lane_width_fallback and not use_temporal:
+                self._lane_half_width_px = None
+                self._lane_half_width_time = None
+                self._lane_diagnostic = "Lane lost: boundary gap exceeded"
+                return None, debug_image, debug_mask
+            if (self.boundary_risk_stop
+                    and white_x <= self.white_boundary_risk_fraction * w):
+                self._lane_half_width_px = None
+                self._lane_half_width_time = None
+                self._lane_diagnostic = "Lane lost: white boundary risk"
+                return None, debug_image, debug_mask
+            half_width = (self._lane_half_width_px if use_temporal
+                          else self.fallback_lane_width_fraction * w)
+            self._lane_diagnostic = ("White-only temporal fallback" if use_temporal
+                                     else "White-only fallback")
+            lane_center_x = white_x - half_width
         else:
+            self._lane_half_width_px = None
+            self._lane_half_width_time = None
             self._lane_diagnostic = "Lane lost: no boundaries"
             return None, debug_image, debug_mask
 
         if not math.isfinite(lane_center_x) or not 0 <= lane_center_x < w:
             self._lane_both_visible = False
+            self._lane_half_width_px = None
+            self._lane_half_width_time = None
             self._lane_diagnostic = "Lane lost: centre outside image"
             return None, debug_image, debug_mask
 
         if yellow_x is not None and white_x is not None:
             self._lane_limits = (yellow_x, white_x)
         else:
-            half_width = self.fallback_lane_width_fraction * w
             self._lane_limits = (lane_center_x - half_width, lane_center_x + half_width)
 
-        target_center_x = 0.50 * w
+        target_center_x = self.lane_target_fraction * w
         lane_error = (lane_center_x - target_center_x) / (w / 2)
 
         # Draw debug overlays.
@@ -718,13 +860,33 @@ class LaneFollowerNode(DTROS):
         mask |= cv2.inRange(hsv, self.red_high_lower, self.red_high_upper)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        candidates = []
         for contour in contours:
-            _, _, width, height = cv2.boundingRect(contour)
+            x, y, width, height = cv2.boundingRect(contour)
+            area = cv2.contourArea(contour)
             if (width >= w * self.red_stop_min_width_fraction
                     and width >= 3 * height
-                    and cv2.contourArea(contour) >= h * w * 0.003):
-                return True
-        return False
+                    and area >= h * w * 0.003):
+                bottom_fraction = float(y0 + y + height) / h
+                candidates.append({
+                    "box": [int(x0 + x), int(y0 + y), int(width), int(height)],
+                    "bottom_fraction": bottom_fraction,
+                    "width_fraction": float(width) / w,
+                    "area_fraction": float(area) / (h * w),
+                })
+        if not candidates:
+            self._red_line_visible = False
+            self._red_line_detection = None
+            return False
+        # The lowest valid transverse line is the nearest candidate.
+        detection = max(
+            candidates, key=lambda item: (item["bottom_fraction"], item["area_fraction"]))
+        detection["trigger_fraction"] = self.red_stop_trigger_bottom_fraction
+        detection["triggered"] = (
+            detection["bottom_fraction"] >= self.red_stop_trigger_bottom_fraction)
+        self._red_line_visible = True
+        self._red_line_detection = detection
+        return detection["triggered"]
 
     def compute_wheel_speeds(self, lane_error):
         now = time.monotonic()
@@ -744,11 +906,33 @@ class LaneFollowerNode(DTROS):
             )
 
             if abs(self.filtered_error) < self.deadband:
-                control_error = 0.0
+                if self.smooth_steering_deadband:
+                    # Attenuate small errors without a jump at +/-deadband.
+                    # e*(2r-r^2), r=abs(e)/deadband, joins e with equal
+                    # value and slope at the boundary; curve authority outside
+                    # this region is unchanged. deadband=0 skips this branch.
+                    ratio = abs(self.filtered_error) / self.deadband
+                    control_error = self.filtered_error * ratio * (2.0 - ratio)
+                else:
+                    control_error = 0.0
             else:
                 control_error = self.filtered_error
 
-            raw_steering = self.k_p * control_error
+            effective_k_p = self.k_p
+            if (self.near_center_k_p < self.k_p
+                    and self.full_gain_error > self.deadband):
+                magnitude = abs(self.filtered_error)
+                if magnitude <= self.deadband:
+                    effective_k_p = self.near_center_k_p
+                elif magnitude < self.full_gain_error:
+                    ratio = ((magnitude - self.deadband)
+                             / (self.full_gain_error - self.deadband))
+                    # Smoothstep avoids a gain jump at either boundary.
+                    blend = ratio * ratio * (3.0 - 2.0 * ratio)
+                    effective_k_p = (self.near_center_k_p
+                                     + (self.k_p - self.near_center_k_p) * blend)
+
+            raw_steering = effective_k_p * control_error + self.steering_bias
             raw_steering = float(np.clip(raw_steering, -self.max_steering, self.max_steering))
 
             steering = float(np.clip(
@@ -768,7 +952,23 @@ class LaneFollowerNode(DTROS):
         left_speed = float(np.clip(left_speed, 0.0, self.max_speed))
         right_speed = float(np.clip(right_speed, 0.0, self.max_speed))
 
-        if not self.drive_enabled:
+        if (self.drive_enabled and lane_error is not None
+                and math.isfinite(lane_error)):
+            active_floor = self.min_active_wheel_speed
+            if self.taper_inner_wheel_floor and self.max_steering > 0:
+                turn_fraction = min(1.0, abs(steering) / self.max_steering)
+                # Keep the calibrated floor through ordinary corrections. Only
+                # taper it during the final 10% of steering authority, where a
+                # sharp bend needs pivot-like curvature. At full steering the
+                # inner wheel may reach zero; the supervisor's encoder guard
+                # still requires the commanded outside wheel to keep moving.
+                taper_fraction = float(np.clip(
+                    (turn_fraction - 0.90) / 0.10, 0.0, 1.0
+                ))
+                active_floor *= 1.0 - taper_fraction
+            left_speed = max(left_speed, active_floor)
+            right_speed = max(right_speed, active_floor)
+        else:
             left_speed = 0.0
             right_speed = 0.0
 
@@ -829,6 +1029,16 @@ class LaneFollowerNode(DTROS):
         return self._lane_diagnostic if self._last_lane_error is None else "Zero wheel request"
 
     def status(self):
+        now = time.monotonic()
+        junction_elapsed = (
+            max(0.0, now - self._crossing_started)
+            if (self._crossing_started is not None
+                and self.navigation_state in ("crossing", "reacquiring"))
+            else None)
+        junction_deadline_remaining = (
+            max(0.0, self._junction_deadline_at - now)
+            if self._junction_deadline_at is not None
+            else None)
         return {
             "vehicle": self.vehicle_name, "state": self.navigation_state,
             "drive_enabled": self.drive_enabled, "manual_stop": self.manual_stop,
@@ -836,9 +1046,31 @@ class LaneFollowerNode(DTROS):
             "wheel_speeds": list(self._last_wheel_speeds),
             "camera_age": max(0.0, time.monotonic() - self._last_frame_time),
             "route_enabled": self.route_enabled, "route": list(self.route),
+            "route_map_id": self.route_map_id,
+            "start_approach": self.start_approach,
+            "destination_approach": self.destination_approach,
             "next_junction": self.route[self.route_index] if self.route_enabled else None,
             "route_index": self.route_index, "active_turn": self._active_turn,
             "junctions_calibrated": self.junctions_calibrated,
+            "junction_phase": self._junction_phase,
+            "junction_elapsed_seconds": junction_elapsed,
+            "junction_progress_seconds": (
+                self._crossing_progress
+                if self.navigation_state in ("crossing", "reacquiring") else None),
+            "junction_deadline_remaining_seconds": junction_deadline_remaining,
+            "junction_last_result": self._last_junction_result,
+            "junction_settings": {
+                "entry_seconds": self.junction_entry_seconds,
+                "straight_seconds": self.junction_straight_seconds,
+                "left_seconds": self.junction_left_seconds,
+                "right_seconds": self.junction_right_seconds,
+                "reacquire_timeout": self.junction_reacquire_timeout,
+                "straight_speed": self.junction_straight_speed,
+                "left_speed": self.junction_left_speed,
+                "right_speed": self.junction_right_speed,
+                "left_bias": self.junction_left_bias,
+                "right_bias": self.junction_right_bias,
+            },
             "fault": self._fault_reason, "last_command": self._last_command,
             "control_epoch": self._control_epoch,
             "active_client": self._active_client_id,
@@ -850,6 +1082,52 @@ class LaneFollowerNode(DTROS):
             "camera_valid": self._camera_valid,
             "camera_error": self._camera_error,
             "lane_diagnostic": self._lane_diagnostic,
+            "lane_target_fraction": self.lane_target_fraction,
+            "k_p": self.k_p,
+            "near_center_k_p": self.near_center_k_p,
+            "full_gain_error": self.full_gain_error,
+            "max_steering": self.max_steering,
+            "min_active_wheel_speed": self.min_active_wheel_speed,
+            "taper_inner_wheel_floor": self.taper_inner_wheel_floor,
+            "steering_bias": self.steering_bias,
+            "smooth_steering_deadband": self.smooth_steering_deadband,
+            "temporal_lane_width_fallback": self.temporal_lane_width_fallback,
+            "temporal_lane_width_timeout": self.temporal_lane_width_timeout,
+            "temporal_yellow_only_timeout": self.temporal_yellow_only_timeout,
+            "boundary_risk_stop": self.boundary_risk_stop,
+            "white_boundary_risk_fraction": self.white_boundary_risk_fraction,
+            "lane_half_width_px": self._lane_half_width_px,
+            "lane_half_width_age": (None if self._lane_half_width_time is None else
+                                    max(0.0, time.monotonic() - self._lane_half_width_time)),
+            "lane_both_visible": self._lane_both_visible,
+            "yellow_boundary_visible": self._yellow_boundary_visible,
+            "white_boundary_visible": self._white_boundary_visible,
+            "red_line_visible": self._red_line_visible,
+            "red_line_detection": self._red_line_detection,
+            "red_stop_trigger_bottom_fraction": self.red_stop_trigger_bottom_fraction,
+            "lane_limits": (None if self._lane_limits is None else list(self._lane_limits)),
+            "sharp_corner_enabled": self.sharp_corner_enabled,
+            "sharp_corner_state": self._sharp_corner_state,
+            "sharp_corner_phase": self._sharp_corner_phase,
+            "sharp_corner_confirm_seconds": self.sharp_corner_confirm_seconds,
+            "sharp_corner_recent_lane_seconds": self.sharp_corner_recent_lane_seconds,
+            "sharp_corner_approach_seconds": self.sharp_corner_approach_seconds,
+            "sharp_corner_turn_speed": self.sharp_corner_turn_speed,
+            "sharp_corner_min_turn_seconds": self.sharp_corner_min_turn_seconds,
+            "sharp_corner_white_confirm_seconds": self.sharp_corner_white_confirm_seconds,
+            "sharp_corner_pivot_seconds": self.sharp_corner_pivot_seconds,
+            "sharp_corner_relief_seconds": self.sharp_corner_relief_seconds,
+            "sharp_corner_relief_inner_speed": self.sharp_corner_relief_inner_speed,
+            "sharp_corner_max_turn_seconds": self.sharp_corner_max_turn_seconds,
+            "sharp_corner_reacquire_seconds": self.sharp_corner_reacquire_seconds,
+            "sharp_corner_trigger_error": self.sharp_corner_trigger_error,
+            "sharp_corner_exit_error": self.sharp_corner_exit_error,
+            "yellow_lower": self.yellow_lower.tolist(),
+            "yellow_upper": self.yellow_upper.tolist(),
+            "white_lower": self.white_lower.tolist(),
+            "white_upper": self.white_upper.tolist(),
+            "filtered_lane_error": self.filtered_error,
+            "steering_before_flip": self.prev_steering,
             "stop_reason": self._stop_reason,
             "lane_error": self._last_lane_error,
             "duck_candidates": list(self._duck_boxes),
@@ -864,6 +1142,12 @@ class LaneFollowerNode(DTROS):
 
     def navigation_fault(self, reason):
         self.navigation_state = "fault"
+        self._junction_phase = "fault"
+        self._last_junction_result = {
+            "outcome": "fault", "reason": str(reason),
+            "turn": self._active_turn,
+        }
+        self._junction_deadline_at = None
         self.manual_stop = True
         self._fault_reason = reason
         self.publish_wheels(0.0, 0.0)
@@ -881,6 +1165,9 @@ class LaneFollowerNode(DTROS):
             self.manual_stop = True
             if self.navigation_state in ("crossing", "reacquiring"):
                 self.navigation_fault("Laptop connection lost during junction; position must be reset")
+            if self._sharp_corner_state in ("approach", "turning"):
+                self.sharp_corner_fault(
+                    "Laptop connection lost during sharp corner; position must be reset")
             self.publish_wheels(0.0, 0.0)
 
     def check_camera_timeout(self, event):
@@ -896,6 +1183,9 @@ class LaneFollowerNode(DTROS):
                 self._obstacle_clear_since = None
                 if self.navigation_state in ("crossing", "reacquiring"):
                     self.navigation_fault("Camera lost during junction; position must be reset")
+                if self._sharp_corner_state in ("approach", "turning"):
+                    self.sharp_corner_fault(
+                        "Camera lost during sharp corner; position must be reset")
                 self.publish_wheels(0.0, 0.0)
             self.publish_status()
 
@@ -961,6 +1251,9 @@ class LaneFollowerNode(DTROS):
                     self._client_connection_lost = False
                     if self.navigation_state in ("crossing", "reacquiring"):
                         self.navigation_fault("Stopped within junction; position must be reset")
+                    if self._sharp_corner_state in ("approach", "turning"):
+                        self.sharp_corner_fault(
+                            "Stopped during sharp corner; position must be reset")
                     self.manual_stop = True
                     self.publish_wheels(0.0, 0.0)
                 elif action in ("slow_down", "speed_up", "speed_scale"):
@@ -977,14 +1270,28 @@ class LaneFollowerNode(DTROS):
                             or any(self._last_wheel_speeds)):
                         raise ValueError("Stop in route mode before setting the starting position")
                     route = validate_route(command.get("route"))
+                    if command.get("map_id", MAP_ID) != MAP_ID:
+                        raise ValueError("Route map version does not match the controller")
+                    start_approach = "%s->%s" % tuple(route[:2])
+                    destination_approach = "%s->%s" % tuple(route[-2:])
+                    if command.get("start_approach", start_approach) != start_approach:
+                        raise ValueError("Starting lane does not match the route")
+                    if command.get("destination_approach", destination_approach) != destination_approach:
+                        raise ValueError("Destination red line does not match the route")
                     if command.get("position_confirmed") is not True:
-                        raise ValueError("Confirm placement after the first junction, toward the second")
+                        raise ValueError("Confirm the directed starting lane and position outside a junction")
                     self.route, self.route_index = route, 1
+                    self.route_map_id = MAP_ID
+                    self.start_approach = start_approach
+                    self.destination_approach = destination_approach
                     self.navigation_state = "following"
                     self.manual_stop = True
                     self.red_stop_latched = False
                     self._fault_reason = None
                     self._active_turn = None
+                    self._junction_phase = "idle"
+                    self._junction_deadline_at = None
+                    self._last_junction_result = None
                 elif action == "turn":
                     if not self.route_enabled or self.navigation_state not in ("following", "red_stop"):
                         raise ValueError("Set a route before changing the next turn")
@@ -1036,10 +1343,208 @@ class LaneFollowerNode(DTROS):
         self._crossing_started = time.monotonic()
         self._crossing_updated = self._crossing_started
         self._crossing_progress = 0.0
+        duration, _, _ = self.junction_profile(self._active_turn)
+        # Slow-down commands can stretch progress by at most four times.  The
+        # wall-clock deadline remains independent and includes reacquisition.
+        self._junction_deadline_at = (
+            self._crossing_started
+            + (self.junction_entry_seconds + duration) / 0.25
+            + self.junction_reacquire_timeout + 2.0)
+        self._junction_phase = "entry"
+        self._last_junction_result = None
         self._red_clear_since = self._lane_good_since = None
         self._departed_red = False
         self.navigation_state = "crossing"
         self.red_stop_latched = False
+
+    def junction_profile(self, turn=None):
+        """Return direction-specific duration, centre speed and signed bias."""
+        turn = self._active_turn if turn is None else turn
+        if turn == "straight":
+            return self.junction_straight_seconds, self.junction_straight_speed, 0.0
+        if turn == "left":
+            return self.junction_left_seconds, self.junction_left_speed, self.junction_left_bias
+        if turn == "right":
+            return self.junction_right_seconds, self.junction_right_speed, -self.junction_right_bias
+        raise ValueError("Junction turn must be left, right, or straight")
+
+    def planned_junction_wheels(self, apply_turn=True):
+        """Continue an authorized crossing without relying on lane markings."""
+        _, speed, bias = self.junction_profile()
+        if not apply_turn:
+            bias = 0.0
+        scale = min(self.speed_scale, 1.0)
+        speed *= scale
+        bias *= scale
+        return max(0.0, speed - bias), max(0.0, speed + bias), bias
+
+    def reset_sharp_corner(self, state="idle"):
+        self._sharp_corner_state = state
+        self._sharp_corner_phase = state
+        self._sharp_corner_candidate_since = None
+        self._sharp_corner_state_since = None
+        self._sharp_corner_reacquire_since = None
+        self._sharp_corner_white_since = None
+        self.reset_steering()
+
+    def sharp_corner_fault(self, reason):
+        self.reset_sharp_corner("fault")
+        self.navigation_fault(reason)
+
+    def sharp_corner_wheels(self, lane_error, red_visible):
+        """Own a confirmed sharp right corner until its outgoing lane is stable.
+
+        This is deliberately opt-in. A missing white boundary alone never
+        starts motion: the node must have just seen a complete lane, retain a
+        current yellow divider and observe a right-turn error for several
+        frames. The maneuver remains bounded and preserves all final wheel
+        publication gates.
+        """
+        if not self.sharp_corner_enabled:
+            return None
+
+        now = time.monotonic()
+        active = self._sharp_corner_state in ("approach", "turning", "reacquiring")
+        if red_visible:
+            if active:
+                self.reset_sharp_corner()
+                self.red_stop_latched = True
+                self._stop_started = now
+                self.navigation_state = "red_stop"
+                return 0.0, 0.0, 0.0
+            return None
+        if active and (self.manual_stop or self.obstacle_stop_latched
+                       or self.navigation_state != "following"
+                       or self.client_expired()
+                       or (self.require_client_heartbeat
+                           and self._active_client_id is None)):
+            self.sharp_corner_fault(
+                "Sharp corner interrupted; position must be reset")
+            return 0.0, 0.0, 0.0
+        if self._sharp_corner_state == "fault":
+            return 0.0, 0.0, 0.0
+
+        if self._sharp_corner_state == "cooldown":
+            if now >= self._sharp_corner_cooldown_until:
+                self.reset_sharp_corner()
+            return None
+
+        if self._sharp_corner_state == "idle":
+            if self._lane_both_visible:
+                self._sharp_corner_last_both_time = now
+                self._sharp_corner_candidate_since = None
+                return None
+            recent_complete_lane = (
+                self._sharp_corner_last_both_time is not None
+                and now - self._sharp_corner_last_both_time
+                <= self.sharp_corner_recent_lane_seconds
+            )
+            candidate = (
+                recent_complete_lane
+                and self._yellow_boundary_visible
+                and not self._white_boundary_visible
+                and lane_error is not None
+                and math.isfinite(lane_error)
+                and lane_error >= self.sharp_corner_trigger_error
+            )
+            if not candidate:
+                self._sharp_corner_candidate_since = None
+                return None
+            if self._sharp_corner_candidate_since is None:
+                self._sharp_corner_candidate_since = now
+                return None
+            if now - self._sharp_corner_candidate_since < self.sharp_corner_confirm_seconds:
+                return None
+            self._sharp_corner_state = "approach"
+            self._sharp_corner_phase = "approach"
+            self._sharp_corner_state_since = now
+            self._sharp_corner_reacquire_since = None
+            self.reset_steering()
+
+        if self._sharp_corner_state == "approach":
+            if not self._yellow_boundary_visible:
+                self.sharp_corner_fault(
+                    "Yellow boundary lost during sharp-corner approach; position must be reset")
+                return 0.0, 0.0, 0.0
+            if now - self._sharp_corner_state_since < self.sharp_corner_approach_seconds:
+                speed = self.base_speed * min(self.speed_scale, 1.0)
+                return speed, speed, 0.0
+            self._sharp_corner_state = "turning"
+            self._sharp_corner_phase = "pivot"
+            self._sharp_corner_state_since = now
+            self._sharp_corner_reacquire_since = None
+            self._sharp_corner_white_since = None
+
+        if now - self._sharp_corner_state_since > self.sharp_corner_max_turn_seconds:
+            self.sharp_corner_fault(
+                "Sharp corner exceeded its turn limit; position must be reset")
+            return 0.0, 0.0, 0.0
+
+        if self._sharp_corner_state == "turning":
+            turn_elapsed = now - self._sharp_corner_state_since
+            white_handoff = (
+                turn_elapsed >= self.sharp_corner_min_turn_seconds
+                and self._white_boundary_visible
+            )
+            if white_handoff:
+                if self._sharp_corner_white_since is None:
+                    self._sharp_corner_white_since = now
+                elif (now - self._sharp_corner_white_since
+                      >= self.sharp_corner_white_confirm_seconds):
+                    self._sharp_corner_state = "reacquiring"
+                    self._sharp_corner_phase = "lane_reacquire"
+                    self._sharp_corner_reacquire_since = None
+                    self._sharp_corner_white_since = None
+                    self.reset_steering()
+            else:
+                self._sharp_corner_white_since = None
+                if not self._yellow_boundary_visible:
+                    self.sharp_corner_fault(
+                        "Lane boundaries lost during sharp corner; position must be reset")
+                    return 0.0, 0.0, 0.0
+
+        if self._sharp_corner_state == "reacquiring":
+            if lane_error is None or not math.isfinite(lane_error):
+                self.sharp_corner_fault(
+                    "Outgoing lane lost during sharp-corner reacquisition; position must be reset")
+                return 0.0, 0.0, 0.0
+            aligned = (self._lane_both_visible
+                       and abs(lane_error) <= self.sharp_corner_exit_error)
+            if aligned:
+                if self._sharp_corner_reacquire_since is None:
+                    self._sharp_corner_reacquire_since = now
+                elif (now - self._sharp_corner_reacquire_since
+                      >= self.sharp_corner_reacquire_seconds):
+                    self._sharp_corner_state = "cooldown"
+                    self._sharp_corner_phase = "cooldown"
+                    self._sharp_corner_cooldown_until = now + 1.0
+                    self._sharp_corner_candidate_since = None
+                    self._sharp_corner_state_since = None
+                    self._sharp_corner_reacquire_since = None
+                    self.reset_steering()
+            else:
+                self._sharp_corner_reacquire_since = None
+            return self.compute_wheel_speeds(lane_error)
+
+        speed_scale = min(self.speed_scale, 1.0)
+        speed = self.sharp_corner_turn_speed * speed_scale
+        cycle_seconds = (self.sharp_corner_pivot_seconds
+                         + self.sharp_corner_relief_seconds)
+        cycle_phase = ((now - self._sharp_corner_state_since)
+                       % cycle_seconds)
+        if (self.sharp_corner_relief_inner_speed > 0
+                and cycle_phase >= self.sharp_corner_pivot_seconds):
+            # A short rolling interval releases the scrub load created by a
+            # stationary inside wheel. The outside wheel stays at the full
+            # turn request, so the confirmed corner remains latched.
+            inner = self.sharp_corner_relief_inner_speed * speed_scale
+            self._sharp_corner_phase = "rolling_relief"
+            return speed, inner, -(speed - inner) / 2.0
+        self._sharp_corner_phase = "pivot"
+        # A right pivot drives the outside (left) wheel and releases the inner
+        # wheel. This interval is deliberately shorter than the measured
+        # loaded-stall interval; the encoder watchdog remains authoritative.
+        return speed, 0.0, -speed / 2.0
 
     def navigation_wheels(self, lane_error, red_visible):
         now = time.monotonic()
@@ -1061,57 +1566,69 @@ class LaneFollowerNode(DTROS):
                 self._departed_red |= now - self._red_clear_since >= 0.2
             else:
                 self._red_clear_since = None
-            duration = (self.junction_straight_seconds if self._active_turn == "straight"
-                        else self.junction_turn_seconds)
+            duration, _, _ = self.junction_profile()
             dt = min(max(now - self._crossing_updated, 0.0), 0.1)
             self._crossing_updated = now
             self._crossing_progress += dt * min(self.speed_scale, 1.0)
             elapsed = self._crossing_progress
-            if now - self._crossing_started > (
-                    (self.junction_entry_seconds + duration) / 0.25
-                    + self.junction_reacquire_timeout + 2.0):
+            if (self._junction_deadline_at is None
+                    or now >= self._junction_deadline_at):
                 self.navigation_fault("Junction traversal exceeded its time limit")
                 return 0.0, 0.0, 0.0
             if elapsed >= self.junction_entry_seconds + duration:
                 if state == "crossing":
                     self.navigation_state = "reacquiring"
                     self._reacquire_started = now
+                    self._junction_phase = "searching"
                 good_lane = (self._departed_red and self._lane_both_visible
                              and lane_error is not None and abs(lane_error) < 0.35)
                 if good_lane:
+                    self._junction_phase = "aligning"
                     if self._lane_good_since is None:
                         self._lane_good_since = now
                     if now - self._lane_good_since >= 0.3:
+                        completed_turn = self._active_turn
                         self.route_index += 1
                         self.navigation_state = "following"
                         self._active_turn = None
+                        self._junction_phase = "complete"
+                        self._junction_deadline_at = None
+                        self._last_junction_result = {
+                            "outcome": "reacquired",
+                            "turn": completed_turn,
+                            "route_index": self.route_index,
+                        }
                         self.filtered_error = self.prev_steering = 0.0
                         return self.compute_wheel_speeds(lane_error)
                 else:
                     self._lane_good_since = None
+                    self._junction_phase = "searching"
                 if now - self._reacquire_started >= self.junction_reacquire_timeout:
                     self.navigation_fault("Outgoing lane was not reacquired; position must be reset")
                     return 0.0, 0.0, 0.0
-                if lane_error is None:
-                    return 0.0, 0.0, 0.0
+                # Fresh unmarked intersection images are expected here. Keep
+                # executing the selected bounded profile. Once both outgoing
+                # borders are visible, use lane steering to settle centrally.
+                if not self._lane_both_visible or lane_error is None:
+                    return self.planned_junction_wheels()
                 left, right, steering = self.compute_wheel_speeds(lane_error)
-                ratio = min(1.0, self.junction_speed / max(left, right, 0.001))
+                _, junction_speed, _ = self.junction_profile()
+                ratio = min(1.0, junction_speed / max(left, right, 0.001))
                 return left * ratio, right * ratio, steering
-            bias = 0.0
-            if elapsed >= self.junction_entry_seconds:
-                bias = {"left": self.junction_bias, "right": -self.junction_bias,
-                        "straight": 0.0}[self._active_turn]
-            # Positive right-left difference turns left in differential drive.
-            speed = self.junction_speed * min(self.speed_scale, 1.0)
-            bias *= min(self.speed_scale, 1.0)
-            return max(0.0, speed - bias), max(0.0, speed + bias), bias
+            self._junction_phase = (
+                "entry" if elapsed < self.junction_entry_seconds
+                else "straight" if self._active_turn == "straight" else "turning")
+            return self.planned_junction_wheels(
+                apply_turn=elapsed >= self.junction_entry_seconds)
         if red_visible and not self.red_stop_latched:
             self.red_stop_latched = True
             self._stop_started = now
             if self.route_enabled and self.route_index == len(self.route)-1:
                 self.navigation_state = "route_complete"
+                self._junction_phase = "route_complete"
             elif state == "following":
                 self.navigation_state = "red_stop"
+                self._junction_phase = "stopped"
             rospy.loginfo("Red stop line detected; holding position")
         return self.compute_wheel_speeds(lane_error)
 
@@ -1139,11 +1656,20 @@ class LaneFollowerNode(DTROS):
                 self.avoidance_fault("Invalid camera during passing")
             self._lane_limits = None
             self._lane_both_visible = False
+            self._yellow_boundary_visible = False
+            self._white_boundary_visible = False
+            self._red_line_visible = False
+            self._red_line_detection = None
+            self._lane_half_width_px = None
+            self._lane_half_width_time = None
             self._last_lane_error = None
             self._lane_diagnostic = "Image rejected"
             self._obstacle_clear_since = None
             if self.navigation_state in ("crossing", "reacquiring"):
                 self.navigation_fault("Invalid camera image during junction: " + str(reason))
+            if self._sharp_corner_state in ("approach", "turning"):
+                self.sharp_corner_fault(
+                    "Invalid camera during sharp corner; position must be reset")
             self.publish_wheels(0.0, 0.0)
 
     def callback(self, msg):
@@ -1192,6 +1718,12 @@ class LaneFollowerNode(DTROS):
                     self._last_lane_error = lane_error
                     self._lane_limits = perception._lane_limits
                     self._lane_both_visible = perception._lane_both_visible
+                    self._yellow_boundary_visible = perception._yellow_boundary_visible
+                    self._white_boundary_visible = perception._white_boundary_visible
+                    self._red_line_visible = perception._red_line_visible
+                    self._red_line_detection = perception._red_line_detection
+                    self._lane_half_width_px = perception._lane_half_width_px
+                    self._lane_half_width_time = perception._lane_half_width_time
                     self._lane_diagnostic = perception._lane_diagnostic
                     self._duck_boxes = perception._duck_boxes
                     self._road_geometry = perception._road_geometry
@@ -1199,7 +1731,12 @@ class LaneFollowerNode(DTROS):
                     avoidance = self.avoidance_wheels(img_bgr, red_visible, obstacle_box, passing_lane_box)
                     if avoidance is None:
                         self.update_obstacle(obstacle_box)
-                        left_speed, right_speed, steering = self.navigation_wheels(lane_error, red_visible)
+                        corner = self.sharp_corner_wheels(lane_error, red_visible)
+                        if corner is None:
+                            left_speed, right_speed, steering = self.navigation_wheels(
+                                lane_error, red_visible)
+                        else:
+                            left_speed, right_speed, steering = corner
                     else:
                         self._obstacle_box = obstacle_box
                         self._obstacle_visible = obstacle_box is not None
@@ -1233,6 +1770,17 @@ class LaneFollowerNode(DTROS):
             if self.red_stop_latched:
                 cv2.putText(debug_image, "STOP: red line", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            if self._red_line_detection is not None:
+                x, y, width, height = self._red_line_detection["box"]
+                cv2.rectangle(debug_image, (x, y), (x+width, y+height),
+                              (0, 80, 255), 2)
+                cv2.putText(
+                    debug_image,
+                    "red bottom %.3f / trigger %.3f" % (
+                        self._red_line_detection["bottom_fraction"],
+                        self.red_stop_trigger_bottom_fraction),
+                    (10, 165), cv2.FONT_HERSHEY_SIMPLEX, .45,
+                    (0, 80, 255), 1)
             cv2.imshow("duckiebot_camera", debug_image)
             cv2.imshow("duckiebot_lane_mask", debug_mask)
             cv2.waitKey(1)

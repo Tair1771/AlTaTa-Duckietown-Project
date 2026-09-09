@@ -1,4 +1,19 @@
-# Duck2 Windows driving companion
+# Duck2 Windows applications
+
+For current work, double-click `Start-Duck2Companion.cmd`. It opens a combined
+map, read-only camera viewer and offline chatbot without an API key.
+Choose a directed lane for the starting direction and a red marker for the
+destination. The laptop calculates the route with A*, minimizing junction
+crossings. Its **Start route** button is disabled: planning does not deliver a
+command or claim localization.
+
+The Camera tab accepts only a loopback URL, normally
+`http://127.0.0.1:8766`, reached through the documented SSH tunnel. Opening
+the application does not connect; press **Start viewing** explicitly. The
+companion uses standard Python and Tk only. See `docs/USAGE.md` for the
+read-only service, tunnel and app instructions.
+
+## Earlier connected companion (not needed for the current project workflow)
 
 Double-click Start-Duck2Chat.cmd on this laptop, or run duck2_chat.py with Python 3 and Tkinter on Windows. It uses only standard
 Python libraries. The code can be run directly from the WSL repository using

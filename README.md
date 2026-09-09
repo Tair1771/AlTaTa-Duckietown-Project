@@ -2,16 +2,17 @@
 
 This is the Duck2 university project. It contains a ROS 1 lane follower,
 diagnostic launchers, an interpretation-only offline chatbot and a separate
-offline command-preview window. The chatbot needs no API key and neither
-offline app connects to a robot.
+offline command-preview window. It also includes an offline-first combined
+map, camera and chat companion. The offline chat features need no API key, and
+offline planning never connects to a robot or sends a command.
 
-The project is matched locally to the ROS runtime installed on duck2. A live
-camera compatibility check succeeded with driving disabled and the wheel output
-redirected to a diagnostic topic. The installed driver completed one
-upside-down left-wheel and one right-wheel hardware check. The project
-controller also completed one bounded, approximately one-second lifted-wheel
-check and one short upright forward check. No persistent deployment or
-autonomous track-driving test has been performed.
+The project is matched locally to the ROS runtime installed on duck2. Live
+camera and wheel-interface checks succeeded, and bounded supervised track runs
+have exercised straight motion, a left curve and a sharp-right bend. The latest
+sharp-right run was accepted by the user and stopped on a detected red line
+approximately 15–20 cm ahead. Closer red-line stopping and all straight, left
+and right intersection crossings remain to be calibrated. Routes and obstacle
+passing remain unverified. There is no persistent deployment.
 
 ## What is included
 
@@ -19,6 +20,7 @@ autonomous track-driving test has been performed.
 | --- | --- | --- |
 | Offline interpreter | Understands a curated set of English requests, follow-ups and corrections | Live robot status or execution |
 | Offline command preview | Prepares basic `stop`, speed-step and next-turn drafts and records local test copies | ROS delivery or controller acceptance |
+| Combined companion | Selects directed starting lanes and red-line destinations, calculates a local A* route, interprets route chat and can display a read-only camera service | Localization, route execution or physical junction success |
 | Lane follower | Processes compressed camera images, detects existing yellow/white lane markings and publishes wheel messages | Correct physical colour, steering or speed calibration |
 | Safety logic | Validates settings, rejects bad camera timestamps, stops on lane loss and publishes zero on shutdown | Physical braking distance |
 | Duck avoidance prototype | Optional, disabled-by-default candidate detection and passing state | Reliable obstacle avoidance on the course |
@@ -58,7 +60,7 @@ do not force-push or discard another teammate's work.
 
 ## Windows setup: offline apps
 
-These steps are sufficient for the chatbot and command-preview work. Docker,
+These steps are sufficient for the chatbot, command preview and route planner. Docker,
 ROS, a bot and an API key are not required.
 
 1. Clone this repository or use **Code → Download ZIP** on GitHub, then open
@@ -92,6 +94,16 @@ ROS, a bot and an API key are not required.
    ```
 
    Or double-click `laptop/Start-OfflineChat.cmd`.
+6. For the combined map, chat and camera window, run:
+
+   ```powershell
+   py -3 laptop/duck2_companion.py
+   ```
+
+   Or double-click `laptop/Start-Duck2Companion.cmd`. Select a starting
+   directed lane, then click a red marker as the destination. The local A*
+   planner minimizes junction crossings and never sends its route draft.
+   The Camera tab remains disconnected until **Start viewing** is pressed.
 
 Try `Take the next right`, then `Actually, left`. **Record preview** stores a
 local test record only. `Slow down a little` asks whether the controller's
@@ -99,6 +111,16 @@ standard fixed speed step should be used; it never silently converts “a little
 into a measured speed. Timed/distance stops, pauses, reverse, undo and
 interrupt-with-cancellation are understood where possible but remain unavailable
 for execution.
+
+The combined companion is documented in
+[docs/OFFLINE_COMPANION.md](docs/OFFLINE_COMPANION.md). Its route execution
+button is intentionally disabled until junction traversal is physically
+validated. Camera viewing uses a separate read-only ROS subscriber and owns no
+publisher. The view worked during a stationary live check; starting a new view
+still requires its separate robot service and local SSH tunnel for that session.
+
+For a task-by-task guide covering all Windows apps, the read-only camera view,
+connection checking and bounded test commands, see [docs/USAGE.md](docs/USAGE.md).
 
 Run the Windows chatbot checks with:
 
@@ -177,7 +199,7 @@ shown above, ending at `duckiebot-ros`.
 
 ```powershell
 $repoPath = (Get-Location).Path
-docker run --rm --network none --mount "type=bind,source=$repoPath,target=/project,readonly" --entrypoint bash altata-duck2:noetic-amd64 -lc 'source /environment.sh >/dev/null 2>&1; cd /project/tests && python3 -m unittest test_runtime_setup test_lane_follower test_navigation test_obstacles_and_connection test_first_test_readiness test_bounded_ground_supervisor test_duck_avoidance test_chat test_offline_interpreter test_command_preview test_obstacle_language'
+docker run --rm --network none --mount "type=bind,source=$repoPath,target=/project,readonly" --entrypoint bash altata-duck2:noetic-amd64 -lc 'source /environment.sh >/dev/null 2>&1; cd /project/tests && python3 -m unittest test_runtime_setup test_lane_follower test_navigation test_obstacles_and_connection test_first_test_readiness test_bounded_ground_supervisor test_steering_transition test_duck_avoidance test_ground_test_session test_chat test_offline_interpreter test_offline_chat_ui test_command_preview test_obstacle_language'
 docker run --rm --network none --mount "type=bind,source=$repoPath,target=/project,readonly" --entrypoint bash altata-duck2:noetic-amd64 -lc 'source /environment.sh >/dev/null 2>&1; python3 /project/tests/test_ros_transport.py'
 ```
 
@@ -225,6 +247,47 @@ under `%LOCALAPPDATA%\Duck2\connection-checks`, outside the repository.
 Use `--full` only after a runtime change or when a full compatibility record
 is needed.
 
+For a supervised physical lane test after the user gives a fresh `Go`, use the
+bounded Windows wrapper:
+
+```powershell
+py -3 tools\run_duck2_ground_test.py `
+  --label left-curve-to-straight --duration 15 --confirm-go
+```
+
+This command performs physical movement. Camera-guided tests accept up to 15
+seconds (default 15), with an independent watchdog and unchanged wheel caps.
+The runner verifies exclusive wheel ownership, saves a uniquely named recording
+under `%LOCALAPPDATA%\Duck2\evidence`, and checks that normal control returns
+afterward. It never deletes the robot-side recording. Do not run it for an
+unobserved robot or without a new `Go`. Ordinary launchers remain unchanged.
+The latest sharp-right bend completed successfully by user observation and
+stopped promptly at the next red line. See the dated evidence in
+[docs/TESTING.md](docs/TESTING.md).
+
+Before an intersection run, record stationary red-line geometry at a measured
+placement. This never releases the emergency stop and does not require `-Go`:
+
+```powershell
+.\tools\Start-Duck2-GroundTest.cmd `
+  -Label red-line-10cm -InspectRedLine `
+  -RedStopTriggerBottomFraction 0.65
+```
+
+After choosing the trigger from stationary 15 cm, 10 cm and 5 cm samples, one
+supervised intersection test uses `straight`, `left` or `right`:
+
+```powershell
+.\tools\Start-Duck2-GroundTest.cmd `
+  -Label junction-straight -Duration 15 `
+  -JunctionTurn straight -RedStopTriggerBottomFraction 0.80 -Go
+```
+
+That command moves the robot and still requires a fresh user `Go`. The example
+`0.80` value is illustrative until stationary samples establish the actual
+threshold. Missing borders are expected only after the authorized red-line
+departure; ordinary lane loss still stops the robot.
+
 If the robot address changes, the alias still resolves through `duck2.local`.
 An unfamiliar host key is a stop condition; do not bypass it. A locked-key,
 name-resolution, network or login failure gives one targeted next step and
@@ -245,11 +308,12 @@ optional obstacle/avoidance functions.
 
 ## Verified progress and work remaining
 
-On 2026-09-08 both architecture builds and a fresh reconstructed local-copy
-build succeeded. The final unit run contained **132 tests: 131 passed and one
-platform-specific test was skipped**. The isolated ROS transport suite passed,
-including camera freshness, shutdown, heartbeat, gateway, recorder and route
-checks. Native Windows GUI checks are a separate command listed above.
+The current focused safety/navigation suite passed **150 tests**. The broader
+offline suite passed **282 tests**, with four environment-specific skips. The
+isolated ROS transport suite also passed in a disposable ARM64 container with
+networking and hardware devices disabled. It covers camera freshness, shutdown,
+heartbeat, gateway, recorder, route handling and unmarked authorized crossings.
+Native Windows GUI checks remain separate commands listed above.
 
 Twelve live camera frames decoded at 640×480 with advancing timestamps; the
 latest observed frame age was 0.028 seconds. The application processed live
@@ -265,12 +329,14 @@ control after each run. It is a temporary diagnostic tool, not a deployment
 launcher or evidence of reliable autonomous driving.
 
 Track trials showed that the existing camera settings can temporarily lose the
-yellow divider and enter the white-only fallback on a left curve. The follower
-continued to request left steering, but the robot later approached the white
-border. The installed motor driver maps small normalized commands to similar
-minimum PWM values, so the requested left/right difference may not produce a
-large physical turn. Steering calibration, curve reliability, red-line
-behaviour, obstacle avoidance, routes and reverse remain unverified.
+yellow divider during a dash gap. The former fixed-width white-only fallback
+shifted the inferred centre to the opposite side and weakened the needed left
+correction. Saved-frame replay confirms that the test-only measured-width
+fallback removes those sign changes without changing colour thresholds or
+both-boundary estimates. Straight driving, the left curve and the latest
+sharp-right bend have supervised successful observations. Red stopping remains
+farther from the line than desired; intersection traversal, obstacle avoidance,
+routes and reverse remain unverified.
 Automatic passing remains disabled and chatbot previews remain offline.
 
 ## Important current limits
@@ -283,10 +349,10 @@ Automatic passing remains disabled and chatbot previews remain offline.
 - The verified live-management path is Windows OpenSSH using the protected
   duck2 key. The charging cable may remain connected for tests when its slack
   is clear of the wheels and track.
-- Existing colour defaults detected both boundaries on straights but entered a
-  white-only fallback during a curve. Colour calibration, curve steering,
-  red-line driving, obstacle passing and route turns still require physical
-  measurement.
+- Existing colour defaults detected both boundaries on straights but briefly
+  entered white-only fallback during yellow-dash gaps. The bounded test preset
+  now reuses the latest measured lane width across those gaps; ordinary
+  launchers retain the previous default until the fix passes a supervised run.
 - The offline chatbot and preview window have no network, ROS or robot-delivery
   path.
 

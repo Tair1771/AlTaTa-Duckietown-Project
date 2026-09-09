@@ -4,6 +4,75 @@ This document records the compatibility and readiness checks performed on
 duck2 on 2026-09-08. It separates confirmed software/interface facts from
 physical driving work that remains for the course track.
 
+## Repeatable Windows test entry point
+
+From Windows PowerShell at the repository, run:
+
+```powershell
+.\tools\Start-Duck2-GroundTest.cmd
+```
+
+Without arguments this is a read-only startup check: one Windows SSH invocation
+verifies the trusted key login, robot hostname, running interface containers,
+camera/wheel/kinematics node registration and sole normal wheel publisher. It
+does not subscribe to camera frames, upload source, stop containers, or command
+wheels. It is suitable after a laptop or robot restart. Boot delays, locked
+keys, wrong identities and unexpected controllers fail before test handover.
+It never regenerates keys, bypasses host-key checking or retries automatically.
+
+The entry point selects the bundled Windows Python used successfully on this
+laptop, then the standard Python launcher if available. It runs PowerShell
+with a process-only execution-policy option for the local UNC script; it does
+not change the system policy. Direct WSL invocation of the session runner is
+rejected because WSL does not share Windows SSH authentication or routing.
+The robot's hostname alias handles changing hotspot addresses while retaining
+strict verification of its previously trusted identity.
+
+Only after positioning duck2 and receiving a fresh Go for that specific run:
+
+```powershell
+.\tools\Start-Duck2-GroundTest.cmd -Label sharp-right-white-return -Duration 15 -Go
+```
+
+`-Go` authorizes physical movement. The same startup check runs before staging
+current source and handing over wheel ownership. Fresh camera/encoder checks,
+the independent watchdog, explicit stopping and post-stop ownership checks
+still run for every movement session. Session records retain source hashes and
+installed container image identities outside the repository. A startup pass
+does not prove scene suitability, motor strength, or track performance.
+
+Current bounded right-turn settings and evidence limits are documented in
+[TURNING_DIAGNOSIS.md](TURNING_DIAGNOSIS.md). Future session records include
+private boot identity/container start times and `motor_registers.jsonl` from a
+read-only DB21J/HATv3 probe. Probe errors mean PWM evidence is unavailable; they
+do not prove the motor accepted its command. Installed runtime/calibration is
+preserved. The reader never initializes the HAT or writes hardware registers.
+
+For stationary red-line calibration, place the front of duck2 at a measured
+15 cm, 10 cm or 5 cm before the line and run without `-Go`:
+
+```powershell
+.\tools\Start-Duck2-GroundTest.cmd -Label red-line-10cm -InspectRedLine
+```
+
+This temporarily runs the current detector while emergency stop remains
+latched, records the line's image position outside the repository, verifies
+fresh zero feedback, and restores normal ownership. It performs no physical
+movement. Use the observed line-bottom fractions to choose a provisional
+5–10 cm trigger before the first moving intersection test.
+
+After that calibration and a fresh `Go`, the dedicated one-junction form is:
+
+```powershell
+.\tools\Start-Duck2-GroundTest.cmd -Label junction-straight -Duration 15 `
+  -JunctionTurn straight -RedStopTriggerBottomFraction 0.80 -Go
+```
+
+Use `left` and `right` only after straight passes. The numeric trigger above is
+an example, not a calibrated value. During the authorized crossing, fresh
+unmarked camera frames are expected and do not stop the profile. Normal
+lane-loss stopping resumes after outgoing-lane reacquisition.
+
 ## Confirmed runtime facts
 
 - The robot hostname is `duck2`; it was reachable from Windows over the team
@@ -95,8 +164,50 @@ tests: the follower requested sustained left steering, but a small numerical
 wheel difference did not guarantee a strong physical turn.
 
 On a left curve, the current image processing sometimes used the white-only
-fallback because the yellow dashed divider was absent from the camera mask.
-The robot initially followed the curve but later approached the white border
-during a long supervised run. This is not reliable curve following. Colour/ROI
-calibration, steering trim, braking distance, red-line stopping, route timing,
-obstacle passing and reverse remain unverified.
+fallback because the yellow divider was between dashes. Saved-frame replay
+showed that its fixed assumed lane width moved the inferred centre to the
+opposite side. The bounded camera-guided preset now opts into a focused fix:
+while both boundaries are visible it measures their half-width, then reuses
+that value through a short one-boundary gap. Lane loss clears the value.
+Ordinary launchers retain the previous default. This still needs a supervised
+curve-exit run before it can be called reliable. Colour/ROI calibration,
+braking distance, red-line stopping, route timing, obstacle passing and reverse
+remain unverified.
+
+The latest eight-second straight run used the test-only smooth profile and was
+accepted by the user as near-perfect for the current track placement. Its final
+console summary confirmed bounded stopping, but the detailed recording was lost
+before transfer and is documented honestly in `docs/TESTING.md`. On 2026-09-09
+the user accepted the latest sharp-right bend as perfect for its placement; the
+same recorded run stopped approximately 15–20 cm before a red line. That bend
+does not establish intersection traversal. Closer stopping and straight, left
+and right crossings remain separate live checks.
+
+For subsequent authorized tests, use `tools/run_duck2_ground_test.py` from
+Windows after a fresh user `Go`. It stores verified evidence under
+`%LOCALAPPDATA%\Duck2\evidence`, leaves the robot copy in place, and restores
+`car-interface` only after the temporary test nodes have exited. Do not manually
+delete a robot evidence directory until the laptop copy contains a readable
+`evidence_verified.json` and the session has been reviewed.
+
+Earlier combined left-curve-to-straight trials exposed boundary and cable-drag
+issues; later supervised runs improved after the focused fallback and cable
+handling. The accepted straight and sharp-right observations remain local test
+evidence, while repeatability across the full map is still unverified.
+At the user's request, the camera-guided supervisor now supports explicit
+15-second windows while retaining fresh-camera, ownership and stop checks.
+Source staging uses one compressed SSH transfer, restoration status queries are
+batched, and transfer timings are recorded locally. Use the established Windows
+Python/SSH path without repeating full setup inspection for each trial.
+
+For the isolated upright right-pivot diagnostic, keep duck2 on a clear, flat
+surface, unplug the charger, and use:
+
+```powershell
+.\tools\Start-Duck2-GroundTest.cmd -Label ground-right-pivot -GroundRightPivot
+```
+
+That invocation is read-only. After the user gives a fresh `Go`, add `-Go` to
+run the two-second left `0.15` / right `0.00` profile. The diagnostic retains
+encoder-stall, watchdog, ownership and final-zero checks and records evidence
+outside the repository.
