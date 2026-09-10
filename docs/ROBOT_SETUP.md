@@ -1,5 +1,10 @@
 # duck2 runtime match
 
+Current operational instructions: [STARTUP](STARTUP.md). On 2026-09-10 the
+installed runtime/message fingerprints were reverified and isolated onboard
+tests passed; see [BENCH_CHAT_CHECKS](BENCH_CHAT_CHECKS.md). Normal control may
+remain stopped after test cleanup. Do not interpret SSH success as wheel ownership.
+
 This document records the compatibility and readiness checks performed on
 duck2 on 2026-09-08. It separates confirmed software/interface facts from
 physical driving work that remains for the course track.

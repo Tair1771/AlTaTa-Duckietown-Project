@@ -1,0 +1,2 @@
+# Optional for camera resizing; required for the stationary camera validation tool.
+Pillow>=10,<13

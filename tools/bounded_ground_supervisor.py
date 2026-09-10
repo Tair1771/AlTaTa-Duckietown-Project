@@ -38,6 +38,8 @@ GROUND_ROLLING_RIGHT_LEFT = 0.15
 GROUND_ROLLING_RIGHT_RIGHT = 0.03
 GROUND_EQUAL_WHEELS_LEFT = 0.15
 GROUND_EQUAL_WHEELS_RIGHT = 0.15
+GROUND_STRONG_PIVOT_LEFT = 0.20
+GROUND_STRONG_PIVOT_RIGHT = 0.0
 MAX_UPSIDEDOWN_LEFT_PIVOT_DURATION = 2.0
 # This test path is only used after explicit live authorization.  It remains
 # bounded independently from the general ground-test maximum.
@@ -115,14 +117,62 @@ JUNCTION_STRAIGHT_SECONDS = 1.0
 JUNCTION_LEFT_SECONDS = 1.6
 JUNCTION_RIGHT_SECONDS = 1.6
 JUNCTION_REACQUIRE_TIMEOUT = 3.0
-JUNCTION_STRAIGHT_SPEED = 0.09
-# The left pair references the accepted fixed left curve; the right pair
-# references the accepted sharp-right bend. Neither is yet a junction result.
-JUNCTION_LEFT_SPEED = 0.09
-JUNCTION_LEFT_BIAS = 0.06
+JUNCTION_LEFT_REACQUIRE_TIMEOUT = 5.0
+JUNCTION_RIGHT_REACQUIRE_TIMEOUT = 5.0
+# The first straight crossing exhausted three seconds before the exit reached
+# the lane ROI. Extend only this supervised profile, inside the 15 s session.
+JUNCTION_STRAIGHT_REACQUIRE_TIMEOUT = 9.0
+JUNCTION_REACQUIRE_MAX_ERROR = 0.35
+JUNCTION_STRAIGHT_REACQUIRE_MAX_ERROR = 0.10
+# The previous 0.09/0.09 crossing held constant PWM but slowed to a physical
+# stall. The earlier equal-wheel 0.15 test stayed straight with matched encoder
+# counts, so use that stronger value for the next bounded straight crossing.
+JUNCTION_STRAIGHT_SPEED = 0.15
+# The 0.01 correction saturated while the observed approach drift continued.
+# Give the visual approach correction authority without changing cruise speed.
+JUNCTION_STRAIGHT_APPROACH_MAX_STEERING = 0.03
+JUNCTION_STRAIGHT_VISUAL_APPROACH = True
+# The latest aligned approach frame had matched-row centres near 0.49 of the
+# image width. This dedicated reference does not alter ordinary lane tracking.
+JUNCTION_STRAIGHT_LANE_TARGET_FRACTION = 0.49
+JUNCTION_STRAIGHT_LATERAL_GAIN = 0.25
+JUNCTION_STRAIGHT_HEADING_GAIN = 0.30
+JUNCTION_STRAIGHT_DEPARTURE_MAX_HEADING = 0.12
+JUNCTION_STRAIGHT_REACQUIRE_MAX_LATERAL = 0.10
+JUNCTION_STRAIGHT_REACQUIRE_MAX_HEADING = 0.08
+JUNCTION_STRAIGHT_REACQUIRE_SECONDS = 0.50
+JUNCTION_STRAIGHT_SETTLE_MAX_LATERAL = 0.06
+JUNCTION_STRAIGHT_SETTLE_MAX_HEADING = 0.05
+JUNCTION_STRAIGHT_SETTLE_MAX_STEERING = 0.025
+JUNCTION_STRAIGHT_SETTLE_SECONDS = 0.60
+JUNCTION_STRAIGHT_ENCODER_BALANCE = True
+JUNCTION_STRAIGHT_ENCODER_BALANCE_GAIN = 0.12
+JUNCTION_STRAIGHT_ENCODER_BALANCE_MAX = 0.015
+JUNCTION_STRAIGHT_ENCODER_BALANCE_MIN_TICKS = 12.0
+# The 0.03/0.15 left arc was too wide in the unmarked intersection.
+# Test 0.03/0.18 with the same rolling inner wheel; physical validation pending.
+# The right pair references the accepted sharp-right bend.
+JUNCTION_LEFT_SPEED = 0.105
+JUNCTION_LEFT_BIAS = 0.075
 JUNCTION_RIGHT_SPEED = 0.10
 JUNCTION_RIGHT_BIAS = 0.10
 JUNCTION_POST_REACQUIRE_SECONDS = 1.0
+JUNCTION_STRAIGHT_POST_REACQUIRE_SECONDS = 0.0
+
+
+def junction_post_reacquire_seconds(turn):
+    return (JUNCTION_STRAIGHT_POST_REACQUIRE_SECONDS
+            if turn == "straight" else JUNCTION_POST_REACQUIRE_SECONDS)
+
+
+def junction_reacquire_timeout(turn):
+    if turn == "straight":
+        return JUNCTION_STRAIGHT_REACQUIRE_TIMEOUT
+    if turn == "left":
+        return JUNCTION_LEFT_REACQUIRE_TIMEOUT
+    if turn == "right":
+        return JUNCTION_RIGHT_REACQUIRE_TIMEOUT
+    return JUNCTION_REACQUIRE_TIMEOUT
 MOTION_FEEDBACK_TIMEOUT = 0.5
 ENCODER_FEEDBACK_TIMEOUT = 0.5
 ENCODER_STALL_TIMEOUT = 0.75
@@ -166,11 +216,14 @@ def validate_fixed_turn(duration, left, right):
     ground_equal_wheels = (
         math.isclose(left, GROUND_EQUAL_WHEELS_LEFT, abs_tol=1e-9)
         and math.isclose(right, GROUND_EQUAL_WHEELS_RIGHT, abs_tol=1e-9))
+    ground_strong_pivot = (
+        math.isclose(left, GROUND_STRONG_PIVOT_LEFT, abs_tol=1e-9)
+        and math.isclose(right, GROUND_STRONG_PIVOT_RIGHT, abs_tol=1e-9))
     if established:
         if not 0 < duration <= MAX_FIXED_TURN_DURATION:
             raise ValueError("Fixed-turn duration must be in (0, 8.0] seconds")
     elif (upside_down_pivot or upside_down_load_profile
-          or ground_rolling_right or ground_equal_wheels):
+          or ground_rolling_right or ground_equal_wheels or ground_strong_pivot):
         if not 0 < duration <= MAX_UPSIDEDOWN_LEFT_PIVOT_DURATION:
             raise ValueError("Diagnostic duration must be in (0, 2.0] seconds")
     else:
@@ -238,8 +291,39 @@ def apply_junction_preset(args):
     args.junction_straight_seconds = JUNCTION_STRAIGHT_SECONDS
     args.junction_left_seconds = JUNCTION_LEFT_SECONDS
     args.junction_right_seconds = JUNCTION_RIGHT_SECONDS
-    args.junction_reacquire_timeout = JUNCTION_REACQUIRE_TIMEOUT
+    args.junction_reacquire_timeout = junction_reacquire_timeout(
+        args.junction_turn)
+    args.junction_reacquire_max_error = (
+        JUNCTION_STRAIGHT_REACQUIRE_MAX_ERROR if args.junction_turn == "straight"
+        else JUNCTION_REACQUIRE_MAX_ERROR)
     args.junction_straight_speed = JUNCTION_STRAIGHT_SPEED
+    args.junction_straight_approach_max_steering = (
+        JUNCTION_STRAIGHT_APPROACH_MAX_STEERING)
+    args.junction_straight_visual_approach = JUNCTION_STRAIGHT_VISUAL_APPROACH
+    args.junction_straight_lane_target_fraction = (
+        JUNCTION_STRAIGHT_LANE_TARGET_FRACTION)
+    args.junction_straight_lateral_gain = JUNCTION_STRAIGHT_LATERAL_GAIN
+    args.junction_straight_heading_gain = JUNCTION_STRAIGHT_HEADING_GAIN
+    args.junction_straight_departure_max_heading = (
+        JUNCTION_STRAIGHT_DEPARTURE_MAX_HEADING)
+    args.junction_straight_reacquire_max_lateral = (
+        JUNCTION_STRAIGHT_REACQUIRE_MAX_LATERAL)
+    args.junction_straight_reacquire_max_heading = (
+        JUNCTION_STRAIGHT_REACQUIRE_MAX_HEADING)
+    args.junction_straight_reacquire_seconds = JUNCTION_STRAIGHT_REACQUIRE_SECONDS
+    args.junction_straight_settle_max_lateral = (
+        JUNCTION_STRAIGHT_SETTLE_MAX_LATERAL)
+    args.junction_straight_settle_max_heading = JUNCTION_STRAIGHT_SETTLE_MAX_HEADING
+    args.junction_straight_settle_max_steering = (
+        JUNCTION_STRAIGHT_SETTLE_MAX_STEERING)
+    args.junction_straight_settle_seconds = JUNCTION_STRAIGHT_SETTLE_SECONDS
+    args.junction_straight_encoder_balance = JUNCTION_STRAIGHT_ENCODER_BALANCE
+    args.junction_straight_encoder_balance_gain = (
+        JUNCTION_STRAIGHT_ENCODER_BALANCE_GAIN)
+    args.junction_straight_encoder_balance_max = (
+        JUNCTION_STRAIGHT_ENCODER_BALANCE_MAX)
+    args.junction_straight_encoder_balance_min_ticks = (
+        JUNCTION_STRAIGHT_ENCODER_BALANCE_MIN_TICKS)
     args.junction_left_speed = JUNCTION_LEFT_SPEED
     args.junction_left_bias = JUNCTION_LEFT_BIAS
     args.junction_right_speed = JUNCTION_RIGHT_SPEED
@@ -315,20 +399,48 @@ def require_junction_mode(status, turn, red_trigger=0.65):
             abs_tol=1e-9):
         raise RuntimeError("Lane node reported an invalid red-stop trigger")
     settings = status.get("junction_settings") or {}
+    if turn == "right" and (
+            settings.get("right_entry_policy") != "white_end_then_short_clearance"
+            or settings.get("right_clearance_seconds") != 0.25):
+        raise RuntimeError("Lane node did not confirm white-boundary-based right entry")
     expected = {
         "entry_seconds": JUNCTION_ENTRY_SECONDS,
         "straight_seconds": JUNCTION_STRAIGHT_SECONDS,
         "left_seconds": JUNCTION_LEFT_SECONDS,
         "right_seconds": JUNCTION_RIGHT_SECONDS,
-        "reacquire_timeout": JUNCTION_REACQUIRE_TIMEOUT,
+        "reacquire_timeout": junction_reacquire_timeout(turn),
+        "reacquire_max_error": (JUNCTION_STRAIGHT_REACQUIRE_MAX_ERROR
+                                if turn == "straight" else JUNCTION_REACQUIRE_MAX_ERROR),
         "straight_speed": JUNCTION_STRAIGHT_SPEED,
+        "straight_approach_max_steering": JUNCTION_STRAIGHT_APPROACH_MAX_STEERING,
+        "straight_visual_approach": JUNCTION_STRAIGHT_VISUAL_APPROACH,
+        "straight_lane_target_fraction": JUNCTION_STRAIGHT_LANE_TARGET_FRACTION,
+        "straight_lateral_gain": JUNCTION_STRAIGHT_LATERAL_GAIN,
+        "straight_heading_gain": JUNCTION_STRAIGHT_HEADING_GAIN,
+        "straight_departure_max_heading": JUNCTION_STRAIGHT_DEPARTURE_MAX_HEADING,
+        "straight_reacquire_max_lateral": JUNCTION_STRAIGHT_REACQUIRE_MAX_LATERAL,
+        "straight_reacquire_max_heading": JUNCTION_STRAIGHT_REACQUIRE_MAX_HEADING,
+        "straight_reacquire_seconds": JUNCTION_STRAIGHT_REACQUIRE_SECONDS,
+        "straight_settle_max_lateral": JUNCTION_STRAIGHT_SETTLE_MAX_LATERAL,
+        "straight_settle_max_heading": JUNCTION_STRAIGHT_SETTLE_MAX_HEADING,
+        "straight_settle_max_steering": JUNCTION_STRAIGHT_SETTLE_MAX_STEERING,
+        "straight_settle_seconds": JUNCTION_STRAIGHT_SETTLE_SECONDS,
+        "straight_encoder_balance": JUNCTION_STRAIGHT_ENCODER_BALANCE,
+        "straight_encoder_balance_gain": JUNCTION_STRAIGHT_ENCODER_BALANCE_GAIN,
+        "straight_encoder_balance_max": JUNCTION_STRAIGHT_ENCODER_BALANCE_MAX,
+        "straight_encoder_balance_min_ticks": JUNCTION_STRAIGHT_ENCODER_BALANCE_MIN_TICKS,
         "left_speed": JUNCTION_LEFT_SPEED,
         "right_speed": JUNCTION_RIGHT_SPEED,
         "left_bias": JUNCTION_LEFT_BIAS,
         "right_bias": JUNCTION_RIGHT_BIAS,
     }
     for field, value in expected.items():
-        if not math.isclose(settings.get(field, float("nan")), value, abs_tol=1e-9):
+        actual = settings.get(field)
+        matches = (actual is value if type(value) is bool else
+                   math.isclose(actual if isinstance(actual, (int, float))
+                                and type(actual) is not bool else float("nan"),
+                                value, abs_tol=1e-9))
+        if not matches:
             raise RuntimeError("Lane node did not confirm junction {}".format(field))
     route = JUNCTION_TEST_ROUTES[turn]
     if status.get("route") != route or status.get("route_index") != 1:
@@ -456,11 +568,14 @@ def junction_completion_status(status, expected_turn):
     if not status:
         return False
     result = status.get("junction_last_result") or {}
+    settled = (status.get("junction_settled") is True
+               if expected_turn == "straight" else True)
     return (status.get("state") == "following"
             and status.get("junction_phase") == "complete"
             and status.get("route_index") == 2
             and result.get("outcome") == "reacquired"
-            and result.get("turn") == expected_turn)
+            and result.get("turn") == expected_turn
+            and settled)
 
 
 def encoder_delta_in_window(samples, started_at, stopped_at):
@@ -904,9 +1019,32 @@ def command_acknowledged(statuses, command_id):
     return False
 
 
+def junction_continue_ready(status, route, maximum_camera_age=0.25):
+    """Require a current, complete incoming lane before arming departure."""
+    if not isinstance(status, dict):
+        return False
+    camera_age = status.get("camera_age")
+    lane_error = status.get("lane_error")
+    numeric = lambda value: (isinstance(value, (int, float))
+                             and not isinstance(value, bool)
+                             and math.isfinite(value))
+    return (
+        status.get("camera_valid") is True
+        and numeric(camera_age) and 0.0 <= camera_age <= maximum_camera_age
+        and status.get("lane_both_visible") is True
+        and numeric(lane_error)
+        and status.get("red_stop") is False
+        and status.get("fault") is None
+        and status.get("state") == "following"
+        and status.get("manual_stop") is True
+        and status.get("route") == route
+        and status.get("route_index") == 1
+    )
+
+
 def configure_supervised_junction(rospy, String, publisher, statuses, turn,
                                   hold_stopped, timeout=8.0):
-    """Set one test route and arm its approach while physical output is held."""
+    """Set one test route and arm it only after fresh incoming-lane evidence."""
     route = JUNCTION_TEST_ROUTES[turn]
     commands = [
         {
@@ -920,14 +1058,19 @@ def configure_supervised_junction(rospy, String, publisher, statuses, turn,
             "action": "continue",
         },
     ]
-    deadline = time.monotonic() + timeout
     for command in commands:
+        deadline = time.monotonic() + timeout
         next_publish = 0.0
         while time.monotonic() < deadline:
             hold_stopped()
             if command_acknowledged(statuses, command["id"]):
                 break
             now = time.monotonic()
+            if (command["action"] == "continue"
+                    and not junction_continue_ready(
+                        statuses[-1] if statuses else None, route)):
+                time.sleep(.03)
+                continue
             if (publisher.get_num_connections() > 0 and statuses
                     and now >= next_publish):
                 publish_json_command(rospy, String, publisher, command)
@@ -1201,7 +1344,47 @@ def supervisor_main(args):
                     "_junction_right_seconds:={}".format(args.junction_right_seconds),
                     "_junction_reacquire_timeout:={}".format(
                         args.junction_reacquire_timeout),
+                    "_junction_reacquire_max_error:={}".format(
+                        args.junction_reacquire_max_error),
                     "_junction_straight_speed:={}".format(args.junction_straight_speed),
+                    "_junction_right_tracking_trim:={}".format(
+                        0.0),
+                    "_junction_right_encoder_assist:={}".format(
+                        str(args.junction_turn == "right").lower()),
+                    "_junction_straight_approach_max_steering:={}".format(
+                        args.junction_straight_approach_max_steering),
+                    "_junction_straight_visual_approach:={}".format(
+                        str(args.junction_straight_visual_approach).lower()),
+                    "_junction_straight_lane_target_fraction:={}".format(
+                        args.junction_straight_lane_target_fraction),
+                    "_junction_straight_lateral_gain:={}".format(
+                        args.junction_straight_lateral_gain),
+                    "_junction_straight_heading_gain:={}".format(
+                        args.junction_straight_heading_gain),
+                    "_junction_straight_departure_max_heading:={}".format(
+                        args.junction_straight_departure_max_heading),
+                    "_junction_straight_reacquire_max_lateral:={}".format(
+                        args.junction_straight_reacquire_max_lateral),
+                    "_junction_straight_reacquire_max_heading:={}".format(
+                        args.junction_straight_reacquire_max_heading),
+                    "_junction_straight_reacquire_seconds:={}".format(
+                        args.junction_straight_reacquire_seconds),
+                    "_junction_straight_settle_max_lateral:={}".format(
+                        args.junction_straight_settle_max_lateral),
+                    "_junction_straight_settle_max_heading:={}".format(
+                        args.junction_straight_settle_max_heading),
+                    "_junction_straight_settle_max_steering:={}".format(
+                        args.junction_straight_settle_max_steering),
+                    "_junction_straight_settle_seconds:={}".format(
+                        args.junction_straight_settle_seconds),
+                    "_junction_straight_encoder_balance:={}".format(
+                        str(args.junction_straight_encoder_balance).lower()),
+                    "_junction_straight_encoder_balance_gain:={}".format(
+                        args.junction_straight_encoder_balance_gain),
+                    "_junction_straight_encoder_balance_max:={}".format(
+                        args.junction_straight_encoder_balance_max),
+                    "_junction_straight_encoder_balance_min_ticks:={}".format(
+                        args.junction_straight_encoder_balance_min_ticks),
                     "_junction_left_speed:={}".format(args.junction_left_speed),
                     "_junction_right_speed:={}".format(args.junction_right_speed),
                     "_junction_left_bias:={}".format(args.junction_left_bias),
@@ -1422,14 +1605,23 @@ def supervisor_main(args):
                     if junction_completion_started is None:
                         junction_completion_started = now
                     elif (now - junction_completion_started
-                          >= JUNCTION_POST_REACQUIRE_SECONDS):
+                          >= junction_post_reacquire_seconds(args.junction_turn)):
                         junction_completed = True
                         break
                 else:
                     junction_completion_started = None
             time.sleep(min(0.05, max(0.0, motion_deadline - now)))
         if junction_mode and not junction_completed and early_stop_reason is None:
-            early_stop_reason = "Junction did not reacquire the outgoing lane before the session deadline"
+            latest_status = status_samples[-1][1] if status_samples else {}
+            if (args.junction_turn == "straight"
+                    and (latest_status.get("junction_last_result") or {}).get("outcome")
+                    == "reacquired"):
+                early_stop_reason = (
+                    "Outgoing lane was reacquired but position and heading did not settle "
+                    "before the session deadline")
+            else:
+                early_stop_reason = (
+                    "Junction did not reacquire the outgoing lane before the session deadline")
         stopped_at = time.monotonic()
         publish_stop(rospy, BoolStamped, WheelsCmdStamped, stop, wheels)
         print("MOTION_STOPPED", flush=True)

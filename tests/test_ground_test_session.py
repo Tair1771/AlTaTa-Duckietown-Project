@@ -121,6 +121,22 @@ class GroundSessionTests(unittest.TestCase):
         self.assertEqual(profile, ["--fixed-left", "0.15",
                                    "--fixed-right", "0.0"])
 
+    def test_strong_pivot_is_bounded_exclusive_and_requires_go(self):
+        argv = ["--label", "pivot-start", "--ground-strong-pivot", "--duration", "2"]
+        args = MODULE.parse_args(argv)
+        self.assertEqual(MODULE.diagnostic_profile(args),
+                         ("ground_strong_pivot",
+                          ["--fixed-left", "0.20", "--fixed-right", "0.0"]))
+        with self.assertRaisesRegex(ValueError, "fresh Go"):
+            MODULE.run_session(args)
+        args.confirm_go = True
+        args.duration = 2.01
+        with self.assertRaisesRegex(ValueError, "at most 2.0"):
+            MODULE.run_session(args)
+        args.ground_equal_wheels = True
+        with self.assertRaisesRegex(ValueError, "only one"):
+            MODULE.diagnostic_profile(args)
+
     def test_ground_rolling_right_selects_reviewed_two_second_profile(self):
         args = MODULE.parse_args([
             "--label", "rolling", "--duration", "2",

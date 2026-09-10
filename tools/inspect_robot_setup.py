@@ -80,7 +80,7 @@ def ssh_arguments(host, user, mode="quick", target=None):
         raise ValueError("Use a simple SSH username")
     payload = base64.b64encode(remote_source(mode).encode()).decode("ascii")
     return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-            "-o", "NumberOfPasswordPrompts=0", target or user + "@" + host,
+            "-o", "NumberOfPasswordPrompts=0", "-o", "StrictHostKeyChecking=yes", target or user + "@" + host,
             "echo " + payload + " | base64 -d | python3"]
 
 
@@ -108,9 +108,28 @@ def cache_directory():
 
 
 def runtime_fingerprint(output):
-    containers = [line for line in output.splitlines()
+    containers = [" ".join(line.split()[:2]) for line in output.splitlines()
                   if line.startswith(("ros ", "duckiebot-interface ", "car-interface "))]
     return hashlib.sha256("\n".join(sorted(containers)).encode()).hexdigest()
+
+
+def readiness_issues(output):
+    """SSH success is not proof that normal controller ownership is restored."""
+    lines = output.splitlines()
+    issues = []
+    for name in ("ros", "duckiebot-interface", "car-interface"):
+        if not any(line.startswith(name + " ") for line in lines):
+            issues.append(name + " is not running")
+    for name in ("camera_node", "wheels_driver_node", "kinematics_node"):
+        if "/duck2/" + name not in lines:
+            issues.append(name + " is not registered")
+    wheel_info = output.split("CHECK: ROS master and normal wheel publisher", 1)[-1]
+    wheel_info = wheel_info.split("CHECK:", 1)[0]
+    publishers = re.search(r"Publishers:(.*?)(?:Subscribers:|$)", wheel_info, re.S)
+    names = re.findall(r"\*\s+([^\s]+)", publishers.group(1)) if publishers else []
+    if names != ["/duck2/kinematics_node"]:
+        issues.append("normal wheel ownership is not established (" + ", ".join(names or ["none"]) + ")")
+    return issues
 
 
 def previous_fingerprint(directory):
@@ -162,14 +181,22 @@ def run_check(host, user, mode, target, save):
         print("Action: " + hint)
         print(result.stdout.strip())
         return result.returncode or 1
-    print("duck2 connection check: passed ({})".format(mode))
+    issues = readiness_issues(result.stdout)
+    print("duck2 connection check: {} ({})".format(
+        "SSH/ROS reachable; normal control NOT ready" if issues else "passed", mode))
     print(result.stdout.strip())
     if save:
         path, changed = save_summary(host, addresses, mode, result.stdout)
         print("Saved local summary: " + str(path))
         if changed:
-            print("Runtime identity changed since the previous saved check; run --full before live work.")
-    return 0
+            print("Runtime/container inventory changed; " + (
+                "full metadata recorded in this check." if mode == "full"
+                else "run --full before live work."))
+    for issue in issues:
+        print("NOT READY: " + issue)
+    if issues:
+        print("No services were restarted. Resolve ownership before driving; isolated tests can still run.")
+    return 3 if issues else 0
 
 
 def main():

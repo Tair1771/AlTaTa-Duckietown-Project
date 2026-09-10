@@ -1,5 +1,8 @@
 # Sharp-right diagnosis — 2026-09-09
 
+Historical motor/turn investigation. Later trial outcomes are in [TESTING](TESTING.md).
+Current operating modes are listed in [STARTUP](STARTUP.md).
+
 The equal-command trial travelled straight by the user's observation, with
 216/215 encoder ticks. Earlier statements that this proves equal motor power,
 or that the weak turns prove a defective/weaker left motor, were too strong.

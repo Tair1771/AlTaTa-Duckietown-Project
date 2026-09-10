@@ -1,5 +1,8 @@
 # First physical test preparation
 
+Historical first-test review. For current preparation use [STARTUP](STARTUP.md);
+later physical trials and bench checks are recorded in [TESTING](TESTING.md).
+
 The software checks in this update use our existing node and synthetic images.
 They do not establish physical lane keeping, reliable shadow rejection, stopping
 distance, correct turn timing or general obstacle detection. The offline chatbot

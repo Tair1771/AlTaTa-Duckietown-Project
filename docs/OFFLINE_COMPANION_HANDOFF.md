@@ -1,5 +1,9 @@
 # Offline companion handoff
 
+Historical milestone. The current companion supports live control and local chat;
+use [STARTUP](STARTUP.md), [LIVE_CHAT](LIVE_CHAT.md) and [TESTING](TESTING.md).
+The offline-only restrictions below describe the earlier 2026-09-08 state.
+
 Date: 2026-09-08
 
 ## Completed locally

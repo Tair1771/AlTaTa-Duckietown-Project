@@ -1,8 +1,8 @@
-# Offline combined companion
+# Combined route companion
 
-`laptop/duck2_companion.py` combines the course map, offline chatbot and a
-read-only camera panel. It uses Python's standard library on Windows and needs
-no API key. Route calculation works with no robot or network connection.
+`laptop/duck2_companion.py` combines the course map, camera panel and live
+high-level route controls. It uses Python's standard library on Windows and
+needs no API key. Route calculation still works with no robot connection.
 
 ## Route planning
 
@@ -16,6 +16,21 @@ red line** and click a red marker. The comboboxes provide the same selections
 when markers overlap visually. Opposite approaches to one junction are
 different destinations.
 
+The map automatically fits the available panel when the window is resized,
+including its line widths and labels. **Fit map** repeats that fit without
+changing your route. Selecting the first starting lane automatically switches
+clicks to destination selection; select **Start lane** again to change it.
+The entire course stays visible without scrolling. The route preview scrolls
+independently for longer routes. Placement confirmation, Start and STOP DUCK2
+are available on the map tab as well as the camera/status tab. Changing either
+endpoint clears the placement confirmation so an earlier route's confirmation
+cannot accidentally authorize the new selection.
+
+Close and reopen `laptop/Start-Duck2Companion.cmd` after an app update; an
+already open window continues running its old code. Close while the robot is
+stationary, since closing the app requests Stop. At display scaling above
+150%, the minimum window size increases to keep the route controls visible.
+
 The local A* state is `(previous junction, junction being approached)`. Legal
 successors cross that junction without reversing, and each crossing costs one.
 The heuristic is the relaxed junction distance, so the result is optimal for
@@ -23,13 +38,20 @@ fewest junctions. It is not a shortest-distance or fastest-time claim. Local
 entry and exit ports produce the LEFT, RIGHT and STRAIGHT instruction list;
 ordinary road curves do not consume instructions.
 
-The route is an offline draft. The payload includes `offline_only: true`,
-`execution_enabled: false` and `position_confirmed: false`. The app has no
-control transport and the **Start route** button is disabled.
+Map choices remain local until the user connects to `lane-continuous`, confirms
+duck2's physical directed lane and presses **Start selected route**. The app
+then sends the route and a separate Continue through the high-level gateway.
+It never sends wheel values and refuses Start if wheel ownership is not
+exclusive. Map-only mode ends at the destination red line. Live-chat mode waits
+there for a further instruction, with a 30-second run-ending timeout.
 
-## Chat
+## Live chat
 
-The combined app reuses the curated offline interpreter and adds route phrases:
+The combined app now provides local live chat in the control panel's **Live
+chat** tab. It validates future turns on the map and supports straight-only
+speed and pause controls. See [LIVE_CHAT.md](LIVE_CHAT.md) for setup, examples,
+queue ownership and timeout semantics. The separate offline interpreter remains
+available for preview-only conversation, including:
 
 - `I am starting on A to B`
 - `Go to red line C from B`
@@ -37,10 +59,8 @@ The combined app reuses the curated offline interpreter and adds route phrases:
 - `Where are we going?`
 - `Cancel route`
 
-A next-turn correction recalculates a legal route to the same exact red-line
-destination. An unavailable exit asks for clarification and invalidates the
-recordable draft. Stop, speed, reverse and obstacle language remain
-interpretations only; no simpler command is silently substituted.
+These phrases do not control the live route. Use the map selectors to plan and
+the dedicated **STOP DUCK2** button to stop the live controller.
 
 ## Camera panel
 
@@ -54,7 +74,8 @@ above 0.5 seconds as stale.
 The service owns no ROS publisher and contains no wheel topic or command
 endpoint. Do not start a driving launcher merely to view the camera. The exact
 commands are in [USAGE.md](USAGE.md#read-only-camera-view). A stationary live
-view was verified; route execution and camera-based driving are still disabled.
+view was verified. Route execution requires the separately prepared continuous
+driving session and an explicit Start; opening the viewer alone does not drive.
 
 ## Offline checks
 

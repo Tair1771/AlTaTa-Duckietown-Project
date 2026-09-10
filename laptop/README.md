@@ -1,17 +1,27 @@
 # Duck2 Windows applications
 
+Current startup/reboot instructions: [STARTUP](../docs/STARTUP.md). For isolated
+interactive practice, start `tools/interactive_bench.py` from the repository
+root, then open `Start-BenchCompanion.cmd`. It uses separate simulation ports
+and cannot access the physical wheel driver. [Bench guide](../docs/BENCH_CHAT_CHECKS.md).
+Install `requirements-desktop.txt` in your selected interpreter for Pillow camera
+resizing and checks; the basic UI works with Python/Tk alone.
+
 For current work, double-click `Start-Duck2Companion.cmd`. It opens a combined
-map, read-only camera viewer and offline chatbot without an API key.
+map, camera viewer and live high-level route controller without an API key.
 Choose a directed lane for the starting direction and a red marker for the
 destination. The laptop calculates the route with A*, minimizing junction
-crossings. Its **Start route** button is disabled: planning does not deliver a
-command or claim localization.
+crossings. The local **Live chat** panel edits the future turn queue, requests
+straight-only speed profiles and pauses, and reports completed turns. No API key
+is needed. See [LIVE_CHAT.md](../docs/LIVE_CHAT.md). After the separately started continuous
+ROS service is connected, confirm the physical starting lane and press **Start
+selected route**. The app sends only high-level instructions, never wheel values.
 
 The Camera tab accepts only a loopback URL, normally
 `http://127.0.0.1:8766`, reached through the documented SSH tunnel. Opening
 the application does not connect; press **Start viewing** explicitly. The
-companion uses standard Python and Tk only. See `docs/USAGE.md` for the
-read-only service, tunnel and app instructions.
+companion uses Python/Tk with optional Pillow. See [USAGE](../docs/USAGE.md) for the
+continuous launcher, exclusive-control step, tunnel and app instructions.
 
 ## Earlier connected companion (not needed for the current project workflow)
 

@@ -18,5 +18,6 @@ catkin_install_python(PROGRAMS
   src/command_gateway.py
   src/camera_gateway.py
   src/camera_capture.py
+  src/continuous_safety_watchdog.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

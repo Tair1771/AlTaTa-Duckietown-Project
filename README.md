@@ -1,18 +1,42 @@
-# Duck2: lane following and offline command previews
+# Duck2: continuous right-lane route control
+
+Updated 2026-09-10. Start with the [documentation index](docs/README.md) and
+[startup/reboot checklist](docs/STARTUP.md).
+
+| Mode | Prepare from Windows | Open |
+| --- | --- | --- |
+| Offline map planning | None | `laptop/Start-Duck2Companion.cmd`, stay disconnected |
+| Stationary real camera | `tools/Start-Duck2-AppConnection.cmd` | Normal companion |
+| Interactive simulation, no hardware | `py -3 tools/interactive_bench.py` | `laptop/Start-BenchCompanion.cmd` |
+| Supervised physical route | `tools/Start-Duck2-DrivingMode.cmd` | Normal companion; confirm placement before Start |
+
+Preview cannot drive. Simulation uses separate ports 18765/18766 and a SIMULATION
+banner. Real preview/driving use 8765/8766. Opening the app alone does not start
+its backend. The [bench checks](docs/BENCH_CHAT_CHECKS.md) passed eleven interactive
+app/onboard-controller cases, including real 30-second deadlines; physical
+continuous route performance remains unverified.
+
+Install `requirements-desktop.txt` for camera resizing/checks or
+`requirements-test.txt` for native regressions. Run `py -3 tools/check_project.py`
+to check syntax, links and launcher targets; append `--tests` for native tests.
+The real ROS transport script runs separately in an isolated Noetic container.
 
 This is the Duck2 university project. It contains a ROS 1 lane follower,
-diagnostic launchers, an interpretation-only offline chatbot and a separate
-offline command-preview window. It also includes an offline-first combined
-map, camera and chat companion. The offline chat features need no API key, and
-offline planning never connects to a robot or sends a command.
+diagnostic launchers, offline command tools and a combined map/camera app. The
+current live workflow needs no API key: the user selects duck2's
+directed starting lane and a destination red line, the laptop computes a
+right-lane A* route. The companion's local live chat can replace or append future
+junction turns, request straight-only speed profiles and pause/resume. The laptop
+delivers one validated turn at each red stop and tracks reported completion.
+See [Live chat setup and commands](docs/LIVE_CHAT.md). Map-only mode remains available.
 
 The project is matched locally to the ROS runtime installed on duck2. Live
 camera and wheel-interface checks succeeded, and bounded supervised track runs
-have exercised straight motion, a left curve and a sharp-right bend. The latest
-sharp-right run was accepted by the user and stopped on a detected red line
-approximately 15–20 cm ahead. Closer red-line stopping and all straight, left
-and right intersection crossings remain to be calibrated. Routes and obstacle
-passing remain unverified. There is no persistent deployment.
+have exercised straight motion, a left curve, a sharp-right road bend, red-line
+stopping, and individual straight, left and right intersection crossings. The
+most recent right-intersection run was
+accepted as passable without crossing a boundary. Continuous multi-junction
+routes remain unverified. Obstacle avoidance is disabled.
 
 ## What is included
 
@@ -20,9 +44,9 @@ passing remain unverified. There is no persistent deployment.
 | --- | --- | --- |
 | Offline interpreter | Understands a curated set of English requests, follow-ups and corrections | Live robot status or execution |
 | Offline command preview | Prepares basic `stop`, speed-step and next-turn drafts and records local test copies | ROS delivery or controller acceptance |
-| Combined companion | Selects directed starting lanes and red-line destinations, calculates a local A* route, interprets route chat and can display a read-only camera service | Localization, route execution or physical junction success |
+| Combined companion | Selects a directed start and red-line destination, calculates A*, sends a confirmed route, displays camera/status and provides direct Stop | Automatic localization or a verified complete multi-junction route |
 | Lane follower | Processes compressed camera images, detects existing yellow/white lane markings and publishes wheel messages | Correct physical colour, steering or speed calibration |
-| Safety logic | Validates settings, rejects bad camera timestamps, stops on lane loss and publishes zero on shutdown | Physical braking distance |
+| Safety logic | Validates settings, rejects bad camera timestamps, stops on lane loss, publishes zero on shutdown, and runs an independent continuous-session watchdog | Physical braking distance |
 | Duck avoidance prototype | Optional, disabled-by-default candidate detection and passing state | Reliable obstacle avoidance on the course |
 | Runtime packaging | Builds the package over duck2's pinned ROS Noetic base image | A deployed or running controller |
 
@@ -94,30 +118,27 @@ ROS, a bot and an API key are not required.
    ```
 
    Or double-click `laptop/Start-OfflineChat.cmd`.
-6. For the combined map, chat and camera window, run:
+6. For the combined map, route control and camera window, run:
 
    ```powershell
    py -3 laptop/duck2_companion.py
    ```
 
-   Or double-click `laptop/Start-Duck2Companion.cmd`. Select a starting
-   directed lane, then click a red marker as the destination. The local A*
-   planner minimizes junction crossings and never sends its route draft.
-   The Camera tab remains disconnected until **Start viewing** is pressed.
+   Or double-click `laptop/Start-Duck2Companion.cmd`. Offline map selection
+   remains safe without a bot. Live Start requires the separately launched
+   `lane-continuous` ROS service, SSH tunnel and confirmed physical placement;
+   see [docs/USAGE.md](docs/USAGE.md) and [docs/LIVE_CHAT.md](docs/LIVE_CHAT.md).
 
 Try `Take the next right`, then `Actually, left`. **Record preview** stores a
 local test record only. `Slow down a little` asks whether the controller's
 standard fixed speed step should be used; it never silently converts “a little”
-into a measured speed. Timed/distance stops, pauses, reverse, undo and
-interrupt-with-cancellation are understood where possible but remain unavailable
-for execution.
+into a measured speed. In these older offline tools, timed/distance requests,
+pauses, reverse and undo are interpretation-only. The current live companion
+supports timed/deferred pauses as described in [LIVE_CHAT.md](docs/LIVE_CHAT.md).
 
-The combined companion is documented in
-[docs/OFFLINE_COMPANION.md](docs/OFFLINE_COMPANION.md). Its route execution
-button is intentionally disabled until junction traversal is physically
-validated. Camera viewing uses a separate read-only ROS subscriber and owns no
-publisher. The view worked during a stationary live check; starting a new view
-still requires its separate robot service and local SSH tunnel for that session.
+The companion's camera view uses a read-only ROS subscriber and owns no wheel
+publisher. Route delivery uses the high-level command gateway; only the ROS lane
+follower may publish wheel requests in continuous mode.
 
 For a task-by-task guide covering all Windows apps, the read-only camera view,
 connection checking and bounded test commands, see [docs/USAGE.md](docs/USAGE.md).

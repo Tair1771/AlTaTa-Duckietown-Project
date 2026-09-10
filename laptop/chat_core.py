@@ -75,8 +75,8 @@ class RobotTransport:
         self.heartbeat()
         return self.status()
 
-    def send(self, action, **kwargs):
-        payload = dict(id=str(uuid.uuid4()), action=action, client_id=self.client_id,
+    def send(self, action, command_id=None, **kwargs):
+        payload = dict(id=command_id or str(uuid.uuid4()), action=action, client_id=self.client_id,
                        issued_at=time.time(), **kwargs)
         return request_json(self.url+"/command", payload, self.headers)
 

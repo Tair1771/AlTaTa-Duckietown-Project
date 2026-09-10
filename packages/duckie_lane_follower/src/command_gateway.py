@@ -16,6 +16,7 @@ class Gateway:
         self.current = None
         self.updated = 0.0
         self.acks = {}
+        self.wheels_topic = "/%s/wheels_driver_node/wheels_cmd" % vehicle
         self.publisher = rospy.Publisher(
             "/%s/lane_follower/command" % vehicle, String, queue_size=10)
         self.subscriber = rospy.Subscriber(
@@ -42,7 +43,16 @@ class Gateway:
         with self.condition:
             if self.current is None or time.monotonic()-self.updated > 1.5:
                 raise RuntimeError("No fresh status from duck2")
-            return dict(self.current)
+            status = dict(self.current)
+        try:
+            code, message, state = rospy.get_master().getSystemState()
+            if code != 1:
+                raise RuntimeError(message)
+            publishers = dict(state[0]).get(self.wheels_topic, [])
+        except Exception as error:
+            raise RuntimeError("Cannot verify wheel publisher ownership: %s" % error)
+        status["wheel_publishers"] = sorted(publishers)
+        return status
 
     def heartbeat(self, command):
         if not isinstance(command, dict) or not isinstance(command.get("client_id"), str):

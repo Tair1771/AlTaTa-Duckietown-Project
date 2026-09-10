@@ -27,7 +27,7 @@ class SetupTests(unittest.TestCase):
     def test_remote_docker_host_is_rejected_before_any_call(self):
         with patch.object(subprocess,"run",side_effect=AssertionError("No remote Docker call")):
             with self.assertRaises(ValueError):
-                build_local.local_docker(["docker"],{"DOCKER_HOST":"tcp://192.168.137.222:2375"})
+                build_local.local_docker(["docker"],{"DOCKER_HOST":"tcp://192.0.2.1:2375"})
 
     def test_remote_context_is_rejected(self):
         with patch.object(subprocess,"run",return_value=NS(stdout="robot ssh://duckie@duck2.local")):
@@ -50,7 +50,7 @@ class SetupTests(unittest.TestCase):
                 inspect_robot_setup.ssh_arguments(host,"duckie")
 
     def test_quick_inspection_payload_is_fixed_and_read_only(self):
-        args=inspect_robot_setup.ssh_arguments("192.168.137.222","duckie","quick")
+        args=inspect_robot_setup.ssh_arguments("192.0.2.1","duckie","quick")
         payload=args[-1].split()[1]
         source=base64.b64decode(payload).decode()
         self.assertEqual(source,inspect_robot_setup.QUICK_REMOTE)
@@ -88,7 +88,7 @@ class SetupTests(unittest.TestCase):
 
     def test_login_failure_does_not_retry(self):
         failed=NS(returncode=255,stdout="duckie@duck2: Permission denied (publickey).")
-        with patch.object(inspect_robot_setup,"resolve",return_value=(["192.168.137.222"],None)):
+        with patch.object(inspect_robot_setup,"resolve",return_value=(["192.0.2.1"],None)):
             with patch.object(subprocess,"run",return_value=failed) as run:
                 with contextlib.redirect_stdout(io.StringIO()) as output:
                     code=inspect_robot_setup.run_check("duck2.local","duckie","quick","duck2",False)

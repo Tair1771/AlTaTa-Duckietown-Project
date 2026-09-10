@@ -3,6 +3,7 @@ param(
     [string]$Label = 'sharp-right',
     [ValidateRange(0.1, 15.0)][double]$Duration = 15.0,
     [switch]$GroundRightPivot,
+    [switch]$GroundStrongPivot,
     [switch]$GroundRollingRight,
     [switch]$GroundStrongRollingRight,
     [switch]$GroundEqualWheels,
@@ -24,12 +25,13 @@ if (Test-Path -LiteralPath $bundledPython) {
 }
 $scriptPath = Join-Path $PSScriptRoot 'run_duck2_ground_test.py'
 $durationWasSpecified = $PSBoundParameters.ContainsKey('Duration')
-if (($GroundRightPivot -or $GroundRollingRight -or $GroundStrongRollingRight -or $GroundEqualWheels) -and -not $durationWasSpecified) {
+if (($GroundRightPivot -or $GroundStrongPivot -or $GroundRollingRight -or $GroundStrongRollingRight -or $GroundEqualWheels) -and -not $durationWasSpecified) {
     $Duration = 2.0
 }
 if ($InspectRedLine -and -not $durationWasSpecified) { $Duration = 2.0 }
 $runArgs = @($scriptPath, '--label', $Label, '--duration', $Duration.ToString([Globalization.CultureInfo]::InvariantCulture))
 if ($GroundRightPivot) { $runArgs += '--ground-right-pivot' }
+if ($GroundStrongPivot) { $runArgs += '--ground-strong-pivot' }
 if ($GroundRollingRight) { $runArgs += '--ground-rolling-right' }
 if ($GroundStrongRollingRight) { $runArgs += '--ground-strong-rolling-right' }
 if ($GroundEqualWheels) { $runArgs += '--ground-equal-wheels' }

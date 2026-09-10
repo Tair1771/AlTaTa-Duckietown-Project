@@ -141,7 +141,7 @@ class OfflineTests(unittest.TestCase):
     def test_only_offline_dependencies(self):
         folder = Path(__file__).resolve().parents[1] / "laptop"
         for name in ("offline_interpreter.py", "offline_chat.py"):
-            tree = ast.parse((folder/name).read_text())
+            tree = ast.parse((folder/name).read_text(encoding="utf-8"))
             imports = set()
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):

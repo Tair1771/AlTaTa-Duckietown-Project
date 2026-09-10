@@ -194,7 +194,27 @@ try:
     stop()
     print("PASS actual ROS: JPEG red-line detection and persistent stop", flush=True)
 
-    start("true", ["_route_enabled:=true", "_junctions_calibrated:=true"])
+    start("true", ["_route_enabled:=true", "_junctions_calibrated:=true",
+                   "_junction_reacquire_timeout:=7.0",
+                   "_junction_reacquire_max_error:=0.10",
+                   "_junction_straight_speed:=0.15",
+                   "_junction_straight_approach_max_steering:=0.01",
+                   "_junction_straight_visual_approach:=true",
+                   "_junction_straight_lane_target_fraction:=0.49",
+                   "_junction_straight_lateral_gain:=0.25",
+                   "_junction_straight_heading_gain:=0.30",
+                   "_junction_straight_departure_max_heading:=0.12",
+                   "_junction_straight_reacquire_max_lateral:=0.10",
+                   "_junction_straight_reacquire_max_heading:=0.08",
+                   "_junction_straight_reacquire_seconds:=0.50",
+                   "_junction_straight_settle_max_lateral:=0.06",
+                   "_junction_straight_settle_max_heading:=0.05",
+                   "_junction_straight_settle_max_steering:=0.025",
+                   "_junction_straight_settle_seconds:=0.60",
+                   "_junction_straight_encoder_balance:=true",
+                   "_junction_straight_encoder_balance_gain:=0.12",
+                   "_junction_straight_encoder_balance_max:=0.015",
+                   "_junction_straight_encoder_balance_min_ticks:=12"])
     stream(image, .5)
     assert received and all(x == (0.,0.) for x in received), "Unconfirmed route drove"
     command("set_route", route=["A","D","C","E","A"], position_confirmed=True)
@@ -211,11 +231,32 @@ try:
     assert latest_status["state"] == "crossing", latest_status
     assert latest_status["junction_phase"] in ("entry", "turning", "straight"), latest_status
     received.clear()
-    stream(np.zeros_like(image), 3.0)
+    stream(np.zeros_like(image), 5.5)
     assert received and all(max(sample) > 0 for sample in received), \
         "Authorized unmarked crossing requested a zero wheel command"
     assert latest_status["junction_phase"] in ("turning", "straight", "searching"), latest_status
     assert latest_status["route_index"] == 1, latest_status
+    assert latest_status["junction_settings"]["reacquire_timeout"] == 7.0
+    assert latest_status["junction_settings"]["reacquire_max_error"] == 0.10
+    assert latest_status["junction_settings"]["straight_speed"] == 0.15
+    assert latest_status["junction_settings"]["straight_approach_max_steering"] == 0.01
+    assert latest_status["junction_settings"]["straight_visual_approach"] is True
+    assert latest_status["junction_settings"]["straight_lane_target_fraction"] == 0.49
+    assert latest_status["junction_settings"]["straight_lateral_gain"] == 0.25
+    assert latest_status["junction_settings"]["straight_heading_gain"] == 0.30
+    assert latest_status["junction_settings"]["straight_encoder_balance"] is True
+    assert latest_status["junction_departed_red"] is True
+    assert latest_status["junction_reacquisition_blocker"] == (
+        "Waiting for a near-field multi-row outgoing corridor"), latest_status
+    # White-end clearance and the direction-specific minimum turn progress
+    # determine when search begins. Check its configured bound rather than
+    # assuming the old fixed-entry schedule consumed three seconds already.
+    assert 0 < latest_status["junction_search_remaining_seconds"] < 7.0, latest_status
+    # A transverse red marking from cross traffic may re-enter the stop ROI.
+    # It is diagnostic evidence during the bounded crossing, not a new stop.
+    stream(red, .3)
+    assert latest_status["state"] != "fault", latest_status
+    assert latest_status["junction_red_reappeared"] is True, latest_status
     stream(image, .8)
     assert latest_status["state"] == "following", latest_status
     assert latest_status["route_index"] == 2, latest_status
@@ -340,6 +381,41 @@ try:
     assert camera.get_num_connections()==0
     print("PASS combined launcher: node and gateway start together; Ctrl+C stops wheel output",
           flush=True)
+    # Managed chat through the same ROS command/status transport. All camera
+    # and wheel messages belong to this network-disabled synthetic sandbox.
+    start("true", ["_route_enabled:=true", "_junctions_calibrated:=true",
+                   "_require_client_heartbeat:=false", "_base_speed:=0.09",
+                   "_max_speed:=0.20"])
+    stream(image, .3)
+    run_id = str(uuid.uuid4())
+    command("set_route", route=["A", "D"], managed_session=True, run_id=run_id,
+            position_confirmed=True)
+    command("continue")
+    stream(image, .9)
+    assert latest_status["live_session"]["straight"], latest_status
+    assert latest_status["live_session"]["profile"] == "normal"
+    command("straight_profile", value="fast", run_id=run_id,
+            expected_control_epoch=latest_status["control_epoch"])
+    received.clear()
+    stream(image, .6)
+    assert received and max(max(v) for v in received) <= .120001, received
+    command("pause", seconds=1.0, run_id=run_id,
+            expected_control_epoch=latest_status["control_epoch"])
+    received.clear()
+    stream(image, .5)
+    assert received and all(v == (0., 0.) for v in received), received
+    received.clear()
+    stream(image, 1.)
+    assert any(max(v) > .03 for v in received), "Timed pause did not resume"
+    assert latest_status["route"] == ["A", "D"]
+    command("stop")
+    received.clear()
+    stream(image, .4)
+    assert received and all(v == (0., 0.) for v in received)
+    assert not latest_status["live_session"]["active"]
+    stop()
+    print("PASS actual ROS: managed live chat, straight profile, timed pause/resume and Stop", flush=True)
+
     # Experimental avoidance against real ROS messages, with fake camera scenes.
     def passing_scene(left_lane=False, duck=True, near=False):
         frame=np.zeros((480,640,3),dtype=np.uint8)

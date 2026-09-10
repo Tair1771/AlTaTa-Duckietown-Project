@@ -12,7 +12,39 @@ seconds old. The desktop timestamps requests; the gateway supplies a timestamp o
 Stop is accepted regardless of age. Recent ids are deduplicated (100 retained).
 The command response reports accepted/rejected, not measured physical success.
 
-Actions:
+## Managed live-chat mode
+
+`set_route` can additionally carry `managed_session: true` and a unique `run_id`.
+The initial route contains only the two starting-lane junctions. Status advertises
+`live_session.version: 1`, the run id, profile, pending/active pause and deadlines,
+plus `current_approach` and `junction_instruction_ready`. Future turns are owned
+by the laptop. All four actions below require the run id and current
+`expected_control_epoch`:
+
+- `junction_instruction`: `value` is left/right/straight, `approach` is the
+  current directed lane and `expected_route_index` identifies the red stop.
+  The node independently validates the exit and dwell, appends one route edge,
+  then uses the existing crossing controller. Its accepted id is echoed in
+  `live_session.instruction_id`. Completion uses the existing
+  `junction_last_result` outcome/turn/route_index and the updated approach.
+- `pause`: optional finite numeric `seconds` in `(0, 3600]`; queues a pause
+  until a confirmed straight. Omitting seconds gives a 30-second Continue limit.
+  This advances the control epoch so older requests cannot override it.
+- `resume`: resumes a pause or cancels a pending one; cannot bypass red-stop
+  instruction validation, faults, a dead session or a stale camera/connection.
+- `straight_profile`: `value` is slow/normal/fast. Changes apply on confirmed
+  straight roads only. Increases require current straight evidence.
+
+Managed mode disables automatic red-stop departure and legacy `turn` and global
+speed-scale actions. Empty-queue red stops end after 30 seconds from arrival.
+`stop` still ends immediately and invalidates older epochs in every phase.
+The user-facing word **stop** is interpreted by the laptop as `pause`; explicit
+**stop the run**, **quit**, or the Stop button sends protocol `stop`.
+See [LIVE_CHAT.md](LIVE_CHAT.md) for queue replacement/append behavior.
+
+## Legacy / map-only actions
+
+Actions below retain their existing behavior outside managed mode:
 - stop: stop immediately. A stop during crossing faults the route.
 - continue: resume a manual pause. Never enables a debug launcher, clears a fault,
   skips the stop dwell or bypasses missing calibration.
@@ -96,6 +128,15 @@ It requires DUCK2_CONTROL_TOKEN and coordinates Ctrl+C shutdown of both processe
 It retains _junctions_calibrated:=false until physical calibration is supplied.
 The current camera recorder is available separately as lane-record.
 
+`lane-continuous` is the current route/live-chat launcher. It starts stopped and
+combines the physically tested lane, sharp-right and junction presets with the
+command and camera gateways. Obstacle detection and passing remain disabled.
+The desktop must maintain its heartbeat and confirms a directed starting lane
+before sending `set_route` followed by `continue`. The gateway reports current
+wheel publishers; the desktop rejects Start unless the lane follower is the
+only publisher. Normal `car-interface` control must be suspended before this
+launcher and restored after it exits. See [USAGE.md](USAGE.md) for the sequence.
+
 ## Read-only camera service
 
 `camera_gateway.py` subscribes to the existing compressed-camera topic and
@@ -106,6 +147,7 @@ The service defaults to loopback port 8766; the Windows app accepts only a
 loopback URL intended for an SSH tunnel. `lane-camera-view` starts this service
 alone and does not start a controller.
 
-Obstacle candidates trigger a persistent stop. The view must remain clear for
+When experimental obstacle detection is explicitly enabled, candidates trigger
+a persistent stop. The current continuous workflow disables it. The view must remain clear for
 .5 seconds before explicit Continue can release it. Detection is a provisional
 bright/colored-region heuristic, not recognition of every possible obstacle.

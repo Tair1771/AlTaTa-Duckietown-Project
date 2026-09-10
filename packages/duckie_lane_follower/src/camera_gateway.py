@@ -42,6 +42,7 @@ class LanePreview:
     """Use the controller's exact detector method without constructing a controller."""
 
     validate_image = staticmethod(LaneFollowerNode.validate_image)
+    junction_lane_geometry = LaneFollowerNode.junction_lane_geometry
     detect_lane_bgr = LaneFollowerNode.detect_lane_bgr
 
     def __init__(self):
@@ -52,6 +53,8 @@ class LanePreview:
         self.fallback_lane_width_fraction = float(
             rospy.get_param("~fallback_lane_width_fraction", 0.27))
         self.lane_target_fraction = float(rospy.get_param("~lane_target_fraction", 0.50))
+        self.junction_straight_lane_target_fraction = float(rospy.get_param(
+            "~junction_straight_lane_target_fraction", self.lane_target_fraction))
         self.red_stop_y_fraction = float(rospy.get_param("~red_stop_y_fraction", 0.65))
         self.red_stop_trigger_bottom_fraction = float(rospy.get_param(
             "~red_stop_trigger_bottom_fraction", self.red_stop_y_fraction))
@@ -74,6 +77,7 @@ class LanePreview:
         self._lane_half_width_time = None
         self._lane_both_visible = False
         self._lane_limits = None
+        self._junction_lane_geometry = None
         self._lane_diagnostic = "Waiting for camera"
 
 

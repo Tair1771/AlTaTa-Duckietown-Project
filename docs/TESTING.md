@@ -1,5 +1,74 @@
 # Testing status
 
+## 2026-09-10 — cleanup and startup audit
+
+Current native suite: 421 tests, 418 passed and three dependency/platform skips.
+The bundled desktop interpreter separately passed 20 focused startup/UI checks,
+including Pillow-dependent camera tests. Python syntax, relative Markdown links,
+Windows launcher targets, PowerShell parsing and shell launcher syntax passed.
+The default Docker launcher was executed with network disabled and started no
+application node. Local AMD64 and ARM64 builds passed using cached pinned layers.
+An export of the staged project also passed all 421 native tests (three skips),
+the source/link/launcher audit, and an AMD64 build from that fresh directory.
+
+The revised tunnel check verifies both command and camera services and reports
+failed/occupied tunnels instead of treating one command port as success. Live
+startup revalidation was attempted but `duck2.local` no longer resolved during
+this cleanup; no robot services were changed. Prior successful stationary and
+isolated onboard results are preserved in [BENCH_CHAT_CHECKS](BENCH_CHAT_CHECKS.md).
+
+Added current startup and documentation indexes, dependency manifests, and an
+offline project-check command. Historical investigations are labelled rather
+than presented as current launch instructions. Retained older tools that remain
+tested, shared dependencies, or research evidence. Generated Python caches remain
+ignored and excluded from publication; automated recursive cleanup was blocked.
+Runtime licences and tested
+controller/launcher behavior were preserved during cleanup. Git publication is
+explicitly authorized for this cleanup phase.
+
+## 2026-09-10 — local live-chat implementation
+
+Added a laptop-owned map-validated turn queue, robot completion reconciliation,
+straight-only speed profiles, deferred pauses, timed resume and 30-second red/
+indefinite-pause deadlines. Existing launcher values and physical turn profiles
+were retained. Documentation: [LIVE_CHAT.md](LIVE_CHAT.md).
+
+The final native offline suite ran 408 tests: 407 passed and one was skipped.
+Tests include the actual controller with mocked ROS,
+synthetic images and an in-process laptop/controller turn-pause-turn sequence.
+The native Tk checks cover the resized map, minimum-size chat input and Stop
+delivery while another command holds the app lock. Two pre-existing navigation
+tests were corrected to allow the existing steering slew limit; both failures
+were reproduced in the pre-change source copy. An existing test's source read
+was made explicitly UTF-8 for Windows.
+
+After repairing Docker Desktop's stale runtime sockets, both AMD64 and ARM64
+project images built successfully. The ARM64 import check loaded the new session
+module with OpenCV 4.2. The complete isolated Noetic transport script finished
+with exit code 0 on 2026-09-10 at 00:36:38 UTC in container
+`duck2-live-chat-ros-check`, with Docker network mode `none`.
+Its managed-session scenario exercised real local ROS messages for Start,
+straight classification/profile selection, timed zero-output pause, automatic
+resume and Stop. The existing camera freshness, lane/red stopping, heartbeat,
+gateway and shutdown checks also completed. Synthetic camera input and wheel
+topics belonged exclusively to that isolated local ROS master.
+
+Two old transport assertions were updated to match the existing multi-row
+outgoing-corridor diagnostic and the configured seven-second search window
+after white-clearance entry. These assertion changes did not alter the
+controller's turn timing or movement logic. Earlier failed invocations remain
+in the container's cumulative log; the final invocation exited successfully.
+
+The native suite was rerun after the transport assertion changes: 408 tests,
+407 passed and one skipped. `test_ros_transport.py` is a separate executable
+requiring Noetic and is excluded from native unittest discovery.
+No robot deployment, robot camera subscription, robot command, physical movement
+or Git operation occurred in this work.
+
+Straight-profile values (0.09/0.10/0.11; active-profile wheel cap 0.12) and the
+straight classifier still require supervised verification under course lighting.
+They are not a new physical speed/containment calibration.
+
 Latest 2026-09-09 update: [sharp-turn/equal-wheel diagnosis](TURNING_DIAGNOSIS.md).
 The equal 0.15/0.15 retry travelled straight (216/215 encoder ticks), but unequal
 rolling commands still produced nearly equal rotation. Restored only the bounded
@@ -986,8 +1055,8 @@ still stop the test.
 The dedicated `-JunctionTurn straight|left|right` supervisor profile configures
 one valid three-node test route through the existing command interface. It
 treats the mandatory red-line dwell and unmarked crossing as expected states,
-records junction phase/progress/deadline evidence, and stops one second after
-confirmed outgoing-lane reacquisition. The initial maneuver values are
+records junction phase/progress/deadline evidence, then allows a short bounded
+lane-following window after confirmed reacquisition. The initial maneuver values are
 provisional references and have not moved duck2 through an intersection. The
 focused lane, navigation, readiness, supervisor and session suite passed 150
 tests after these changes. The broader offline suite passed 282 tests with four
@@ -997,3 +1066,912 @@ confirmed continuous nonzero requests through an authorized unmarked crossing,
 stable 0.3-second outgoing-lane reacquisition, route advancement, camera and
 heartbeat stopping, and shutdown zero delivery. Physical work must begin with
 stationary red-line calibration and one straight crossing.
+
+### 2026-09-09: red-line calibration and junction startup race
+
+Stationary samples used the frontmost part of duck2's front wheels as the
+distance reference. The median detected red-line bottom fractions were
+`0.68125` at 15 cm, `0.87083` at 10 cm and `0.95000` at 5 cm. Every inspection
+kept physical motion disabled, confirmed zero driver feedback and restored
+`/duck2/kinematics_node` as the normal wheel publisher. A provisional `0.86`
+trigger was selected for the first moving approach; this is a bounded-test
+setting rather than a production default.
+
+Run `20260909T134914Z-junction-straight-086-fdef5361` did not start physical
+motion. Route setup succeeded, but the supervisor published its `continue`
+command before the new node had processed a fresh camera frame. The node
+correctly rejected it with `Waiting for a fresh camera frame`; final wheel
+feedback was zero and normal ownership was restored. Later status showed a
+fresh complete incoming lane, confirming a startup-order race rather than a
+lane-colour or wheel fault.
+
+The supervisor now waits after route setup until status confirms a valid camera
+age no greater than 0.25 seconds, both incoming boundaries, a finite lane
+estimate, no red stop or fault, the expected route/index, and the route's manual
+stop. Only then may it publish `continue`, while the external emergency stop is
+still held. The revised focused suite passed 152 tests. The full isolated ROS
+transport suite also passed in the verified ARM64 image with `--network none`
+and no hardware devices. No physical retry occurred after this fix.
+
+### 2026-09-09: first moving straight crossing and search timeout
+
+The subsequent retry, `20260909T135827Z-junction-straight-086-retry-d1723996`,
+did move. The user observed a stop about 7–8 cm before the red line and accepted
+that distance, a roughly 1–2 second dwell, then forward movement with about
+five degrees of left drift and a stop inside the intersection. Distances in
+this session refer to the frontmost part of the front wheels, not the body.
+Keep the bounded-test red trigger at `0.86`; do not infer an exact distance
+calibration from it. The 5 cm stationary detection reached the bottom of the
+analysed region, so its `0.95` fraction is not a precise unclipped landmark.
+
+Recorded evidence shows a roughly 9.89-second release-to-stop window. The
+controller fault was `Outgoing lane was not reacquired; position must be
+reset`: its three-second search expired. Camera ages in the recorded status
+were approximately 0.04–0.12 seconds; there was no reported encoder stall.
+The unmarked straight-search phase requested equal `0.09` wheel commands.
+Equal requests do not prove equal physical wheel speeds or explain away the
+user's observed drift. Final zero feedback and normal publisher restoration
+were recorded. This is a failed crossing, with provisionally accepted red-stop
+placement, not a successful intersection traversal.
+
+Saved images show the outgoing lane ahead while its markings are still mostly
+above the lane-analysis region. The opposite lane's transverse red line is
+visible beside the outgoing yellow divider. It is not substituted for a
+longitudinal yellow boundary: doing so would corrupt the lane midpoint.
+
+The supervised **straight** profile now permits seven seconds of outgoing-lane
+search, instead of three. Left/right supervised profiles and the ordinary node
+default retain three seconds. The entire physical session remains capped at
+15 seconds, including approach and dwell, and may end before that search
+budget is exhausted. Colour thresholds, stop trigger, wheel profiles and lane
+steering are unchanged. The supervisor rejects a stale node reporting the old
+straight-search timeout. Freshness, publisher ownership, encoder checks,
+manual stop and the independent watchdog remain active.
+
+Additional status fields report departure-red clearance, remaining search time
+and the outstanding reacquisition gate (minimum progress, red clearance,
+ordered boundaries, alignment, or stability). A pair must remain acceptable
+for 0.3 seconds before route progress advances; normal lane-loss stopping then
+resumes. Left and right crossing profiles remain provisional and require
+separate tests; the accepted road-bend pivot is not intersection calibration.
+
+Counterfactual replay of the recorded lane-status samples, using their recorded
+junction settings, reproduced the old timeout. With seven seconds it remained
+in reacquisition and requested alignment at the same point, with route index
+unchanged. This was a replay of perception outputs, not a physical simulation
+or proof of eventual exit: there are no later moving frames from that run.
+
+For the next authorized straight test, use the same four-way approach, centred
+in the incoming right lane, approximately 15 cm before the red line using the
+front-wheel reference. Camera uncovered; cable held slack. The prepared
+Windows launcher settings are `-JunctionTurn straight -Duration 15
+-RedStopTriggerBottomFraction 0.86`. Without `-Go`, it performs only its
+read-only startup check; add `-Go` only after a fresh movement authorization.
+Observe road containment, outgoing-lane acquisition and stopping. The test
+stops up to two seconds after straight-lane reacquisition, or earlier on a fault. Do not
+automatically retry or extend an unsuccessful run indefinitely.
+
+Verification after this change: all 155 focused supervisor, session,
+navigation, lane and readiness tests passed. The updated node built against
+the verified ARM64 ROS image. The isolated ROS suite passed with synthetic
+images, `--network none` and no hardware devices, including a 5.5-second
+unmarked sequence with the seven-second search override, stable reacquisition,
+shutdown and recorder checks. Its first run failed the recorder's assertion
+that every initial frame already has status metadata; the unchanged recorder
+test passed on rerun without the two-CPU container quota. This indicates a
+timing-sensitive check, not a demonstrated recorder fix. Evidence verification
+remains required after physical runs. No physical motion or Git operations
+occurred during this diagnosis and change.
+
+### 2026-09-09: straight crossing reached the outgoing-lane transition
+
+Run `20260909T141957Z-junction-straight-search7-fde4e7f3` used the same
+four-way approach, red trigger `0.86`, seven-second straight search and
+15-second session limit. The user observed a short approach, a stop before the
+red line, a roughly 2–3 second dwell, a straight crossing, then about 5–10
+degrees of rightward correction and a prompt stop approximately 10 cm before
+the outgoing lane entrance. The user did not report crossing a road boundary.
+
+The synchronized evidence confirms a healthy camera age of approximately
+0.054–0.125 seconds, advancing encoders, no supervisor fault, final zero wheel
+feedback and restoration of `/duck2/kinematics_node` as the sole normal wheel
+publisher. The controller found no usable boundaries through the unmarked
+area, first accepted an ordered pair at about 7.16 seconds after release, and
+declared it stable at about 7.46 seconds with lane error still approximately
+`0.17`. During the supervisor's one-second post-reacquisition window the error
+converged through zero; recorded values ended near `-0.08`. The supervisor then
+stopped by design at about 8.51 seconds. This explains the early physical stop:
+it was recorded as a completed junction, not a search timeout or safeguard
+fault. The visible right correction was converging centring behavior, although
+the short remaining window did not let the robot enter the outgoing lane.
+
+For the next **straight-only** trial, stable outgoing-lane acceptance now
+requires absolute lane error below `0.10`, rather than `0.35`. The supervisor
+then permits two seconds of lane following, rather than one, before stopping.
+The recorded error sequence would first meet the stricter stable condition
+about 0.8 seconds later; the extra settling window keeps the predicted stop
+inside the existing 15-second session. This is a counterfactual timing check,
+not a physical result. The seven-second unmarked search, `0.09` straight speed,
+colour bounds, red trigger and ordinary launchers are unchanged. Left and right
+junction trials retain the original `0.35` gate and one-second settling window
+until they are tested separately.
+
+All 155 focused tests passed after the change. They cover the new parameter's
+validation, rejection of the previously accepted `0.17` alignment, acceptance
+of a stable `0.08` alignment, stale-profile rejection and direction-specific
+test isolation. The verified ARM64 ROS image built successfully and the full
+isolated ROS integration process exited `0`, including junction traversal,
+camera freshness, controller loss, recording, shutdown-zero and launcher
+checks. The integration container used `--network none` and no hardware
+devices. No physical motion or Git operations occurred while implementing and
+verifying this adjustment.
+
+### 2026-09-09: transverse red line during straight crossing
+
+Run `20260909T144855Z-junction-straight-align010-settle2-81bf74b7` stopped
+after approximately 3.83 seconds with final zero feedback, restored normal
+wheel ownership and verified evidence. Its camera ages remained approximately
+0.061–0.129 seconds and both encoders advanced. The controller fault was not a
+camera, motor, encoder, ownership or deadline fault. After the departure line
+had cleared, a transverse red marking re-entered the red stop region while
+duck2 was still in the authorised entry phase. Recorded images show this is the
+intersection/cross-traffic marking, consistent with the course layout.
+
+During an explicitly authorised, bounded junction crossing, a red line that
+reappears after departure is now recorded as `junction_red_reappeared` but does
+not cancel the crossing. This permits the known transverse course marking and
+does not use it as a substitute for an outgoing lane boundary. A red line that
+never clears still prevents departure and ends at the bounded deadline. Route
+progress still requires the ordered outgoing yellow-left/white-right pair,
+alignment, stability and a valid camera. Manual Stop, camera freshness,
+publisher ownership, encoder-stall detection and the independent watchdog
+continue to stop the test.
+
+Verification passed after this phase-specific change: 155 focused tests and
+287 broader offline tests passed, with one platform-specific skip. The full
+isolated ARM64 ROS integration process exited `0`. Its synthetic junction
+sequence explicitly cleared the departure red line, presented a transverse red
+line again during crossing, confirmed no fault and the diagnostic flag, then
+reacquired the outgoing lane. The same run passed camera freshness, controller
+loss, evidence recording, launcher cleanup and shutdown-zero checks. It ran
+with `--network none` and no hardware devices. No further physical movement or
+Git operation occurred while implementing this fix.
+
+### 2026-09-09: straight-crossing stall diagnosis and revised bounded preset
+
+Run `20260909T150156Z-junction-straight-cross-red-retry-863b262a` stopped
+safely after the right encoder produced no progress while its wheel remained
+commanded. The user observed rightward travel before the red line, the expected
+stop and dwell, then progressively slower crossing motion until the robot could
+no longer move; motor sound continued briefly. Synchronized evidence separates
+two effects. Before the stop, lane following requested about `0.112/0.068`, so
+the rightward approach correction was commanded. During the unmarked crossing,
+requested and executed output remained `0.09/0.09` and the motor-register
+readback remained stable while both encoder rates declined to zero. Camera data
+remained fresh and missing borders were accepted. The encoder watchdog caused
+the final safe stop; it did not cause the preceding slowdown.
+
+The next straight-only bounded preset uses `0.15/0.15`, based on the earlier
+two-second equal-wheel result with 216/215 encoder ticks and visually straight
+travel. When a red line is already visible on a configured straight approach,
+steering is capped at `0.01` to reduce entry yaw. During the unmarked straight
+crossing, a limited cumulative encoder correction compares left/right progress;
+gain is `0.12` and the adjustment is capped at `0.015`. This correction is
+inactive until both wheels have advanced at least 12 ticks and is unavailable
+when either encoder sample is stale. During outgoing-lane alignment, speed
+scaling now preserves the existing `0.03` active-wheel floor.
+
+These aids are disabled by default and are enabled only by the supervised
+straight-junction preset. The supervisor checks every setting before release.
+Replay of the failed encoder trace would request corrections from approximately
+`0.147/0.153` initially toward `0.149/0.151`; this demonstrates bounded
+direction and magnitude, not a physical result. Focused tests cover approach
+limiting, correction direction and cap, alignment floor and the existing stop
+gates. No physical test or Git operation occurred during this change.
+
+Verification completed with 158 focused tests and 290 broader offline tests
+passing; one platform-specific test was skipped. The complete ROS integration
+suite passed after building the package in duck2's installed ARM64 Noetic base
+inside a disposable container with `--network none`, read-only project mounts
+and no hardware devices. Normal `car-interface` operation and sole
+`/duck2/kinematics_node` wheel-command ownership were confirmed afterward.
+
+### 2026-09-09: straight-junction containment diagnosis and row-matched control
+
+Run `20260909T153355Z-junction-straight-015-balanced-5d288a1a` and the farther
+approach run
+`20260909T153759Z-junction-straight-015-balanced-far-approach-4940f263`
+both stopped safely and restored normal wheel ownership. The second run
+completed its software sequence in approximately 13.01 seconds with encoder
+deltas 851/855 and final zero output. The user observed a marked rightward
+drift before and after the red-line stop, crossing of the right white boundary
+and a transverse red line, followed by visible correction toward the outgoing
+lane centre. This is recorded as failed physical road containment even though
+the old software criterion reported reacquisition.
+
+Synchronized evidence showed that the controller initially requested about
+`0.107/0.073`, which intentionally steered right. The straight-approach cap
+did not activate until the red line entered its image region and then toggled
+with red detection. The detector also combined yellow and white centroids from
+different image depths: initial matched-row lane centres were near image
+centre while the aggregate centroid requested a right correction. The global
+`0.0075` trim added steering in the same direction. At the outgoing side, the
+old test accepted distant boundary fragments and stopped two seconds after a
+lane-error threshold passed without checking heading and centring together.
+The stronger `0.15` crossing power did not show the earlier progressive stall.
+
+The supervised straight-junction mode now uses yellow-left/white-right pairs
+sampled at shared image rows. It requires at least three plausible pairs, a
+substantial row span and near-field support, and rejects broad transverse or
+isolated distant fragments. This produces separate image-space lateral and
+heading errors. The dedicated approach is active from the start of an
+explicit straight-junction test, uses a provisional target fraction of `0.49`,
+and omits the global steering trim. A large trustworthy heading error captured
+at the red stop blocks automatic departure and reports the reason.
+
+During an unmarked straight crossing, the proven `0.15` power and limited
+encoder balancing remain active. A trustworthy visual corridor clears the
+encoder reference and takes steering ownership; if the view becomes unmarked
+again, balancing restarts from fresh encoder counts. Outgoing reacquisition
+requires near-field multi-row position and heading limits for 0.5 seconds.
+After route progress advances, the node remains in a settling phase until
+position, heading and steering are all stable for 0.6 seconds. The supervisor
+no longer treats a fixed two-second post-reacquisition delay as proof of
+alignment; a 15-second expiry after reacquisition is reported as alignment
+incomplete.
+
+Offline verification used duck2's installed ARM64 Noetic/OpenCV 4.2 runtime
+in disposable containers with `--network none`, read-only project mounts and
+no hardware devices. All 301 broader project tests passed with two
+environment-dependent skips. The project image built successfully, and the
+complete isolated ROS transport process passed camera freshness, shutdown
+zero, route traversal, command transport, controller-loss, recording and
+launcher-cleanup checks. The temporary verification image was removed after
+the run. No physical motion or Git operation occurred during this
+implementation.
+
+### 2026-09-09: partial-row steering after failed straight crossing
+
+Run `20260909T162210Z-junction-straight-row-geometry-6b5c7224` stopped
+safely after approximately 13.11 seconds, with encoder deltas 790/795,
+verified final zero feedback and restoration of `/duck2/kinematics_node` as
+the normal wheel publisher. The user observed leftward drift before the red
+line, the expected red stop and restart, continued leftward drift, crossing
+of the outgoing yellow divider and then a stop. This is a failed physical
+road-containment result. The controller reported `Outgoing lane was not
+reacquired`; camera ages remained approximately 0.059–0.161 seconds, so the
+stop was the bounded search timeout rather than stale camera data.
+
+The synchronized status explains both parts of the failure. During the
+approach, the matched-row detector usually found two correctly ordered lane
+slices, but its near-field reacquisition rule required at least three slices
+and a slice near the bottom of the analysed region. The approach therefore
+discarded the two-row evidence and requested equal wheels, leaving the
+observed leftward drift uncorrected. On the outgoing side, useful ordered
+pairs appeared several seconds before the deadline, but they were still in
+the far and middle image rows. They were also discarded, so the controller
+continued approximately straight while the yellow divider moved toward and
+under the camera.
+
+The straight-junction mode now separates *steering confidence* from
+*reacquisition confidence*. Two correctly ordered, plausibly spaced pairs at
+separated image rows may request bounded steering during the approach and
+outgoing search. Route progress still requires the previous stricter
+multi-row fit with near-field support, acceptable lateral and heading error,
+and the stability window. Isolated or broad transverse fragments remain
+invalid. Ordinary lane following and the left/right junction presets are
+unchanged.
+
+Replaying the failed frames through the revised detector requests the
+existing `0.01` maximum right correction on the approach where two-row
+evidence is available. During outgoing search, correction begins on recorded
+frame 69, about 9.53 seconds after motion release, and reaches roughly
+`-0.067` to `-0.080` steering while the lane centre lies to the image right.
+At crossing speed `0.15`, this corresponds approximately to `0.15` on the
+left wheel and `0.07–0.08` on the right after the wheel cap. None of the
+recorded frames satisfies the strict near-field criterion, so replay does not
+claim successful reacquisition or physical success.
+
+Verification passed in duck2's installed ARM64 Noetic/OpenCV 4.2 base using
+disposable containers with `--network none` and no hardware devices: 190
+focused lane, navigation, supervisor, readiness, session and steering tests
+passed; the project image built successfully; and the complete isolated ROS
+transport process passed camera freshness, red stopping, client loss,
+recording, route traversal, combined-launcher shutdown zero and obstacle
+checks. The wider unit run completed 304 tests with three platform-specific
+skips; its only initial error was rerun successfully after using the built
+project image required by the launcher test. No physical movement or Git
+operation occurred during this diagnosis and implementation.
+
+### 2026-09-09: perspective width and approach authority correction
+
+Run `20260909T165423Z-junction-straight-partial-row-retry-b7b5af48`
+failed physical containment: the user observed approximately 10–15 degrees
+of left drift on approach, the red stop/dwell, departure along that heading,
+crossing of the outgoing yellow divider, then correction toward lane centre.
+The search timer stopped the run at 13.53 seconds. Final feedback was zero;
+normal wheel ownership was restored and 91 frames were verified.
+
+The approach requested approximately 0.10 left / 0.08 right, a rightward
+correction, yet physical left drift continued. This establishes inadequate
+correction on this run, not a reversed steering sign or a proven hardware
+cause. The opt-in supervisor approach limit is now 0.03 rather than 0.01;
+base speed, colour thresholds and ordinary launchers are unchanged.
+
+The detector rejected nearby boundary gaps wider than 70% of image width,
+then extrapolated two distant samples down to an unseen near row. It now
+accepts ordered gaps up to 95% of image width and evaluates the fit within
+its observed row span. Near-field support, alignment and stability are still
+required to advance the route. With the recorded colour settings, saved-frame
+replay finds four or five approach pairs and valid near-field support, and
+recovers valid outgoing geometry around 12.47 seconds. At 13.27 seconds the
+recording remains outside the centring threshold; no successful containment
+or completion is inferred. The straight-only search allowance becomes nine
+seconds; the independent supervisor still caps the entire session at 15
+seconds. Missing camera data and all existing fault stops remain active.
+
+Correction to the preceding replay description: the live preset's wheel cap
+is 0.20, not 0.15. The latest run reached 0.20 left-wheel output during visual
+correction. Earlier replay using default fixture limits was not an exact
+reproduction of the live preset. Current replay explicitly uses the recorded
+yellow and white lower bounds; it is perception evidence, not a simulated path.
+
+Verification: 194 focused lane/navigation/readiness/steering/supervisor/session
+tests passed in a network-isolated ARM64 Noetic container with no hardware
+devices. After the timer change, all 84 supervisor/session tests passed again.
+The full ROS integration suite was not rerun for this change. No physical
+movement or Git operations occurred. The next physical run requires a new Go.
+
+### 2026-09-09: accepted straight crossing and departure-bias rollback
+
+Run `20260909T170225Z-junction-straight-perspective-fix-279b05f1`
+was accepted by the user: straight approach, red-line stop and dwell, slight
+leftward departure, outgoing-lane centring, and no boundary crossings.
+Software completed the junction and confirmed zero feedback and restored ownership.
+
+Run `20260909T171651Z-junction-straight-departure-bias-8c413ab8`
+added a fixed -0.004 departure bias. The user observed hesitation, declining
+speed and failure to enter the outgoing lane before stopping. During unmarked
+travel, recorded commands stayed near 0.155/0.145 while encoder progress fell
+to roughly 35–65 ticks/second, versus about 100 in the accepted run. Visual
+outgoing steering began about eight seconds after departure rather than four;
+it did request a right correction, but reacquisition timed out. Final zero
+feedback and restored ownership were confirmed. Equal total encoder counts
+do not prove road alignment or adequate speed.
+
+The earlier claim that a small encoder mismatch clearly caused the left drift
+was overstated. The accepted run also retained a modest image-based heading
+error at the stop; these recordings do not distinguish inherited heading,
+wheel-response variation and ground travel sufficiently to justify a fixed
+bias. The cause of the slower motion at steady commands remains unestablished.
+
+Removed the fixed departure bias and its parameter plumbing. SHA-256 checks
+confirm the controller and supervisor now exactly match the accepted run:
+controller `e53a480f5ac47332007b432f7621abd0ac5c08d1b7244e56835544245c75d1d7`;
+supervisor `3fe3da38bac0a703486469630724f9bb73fa71ec32048e87f7b60320527e66a2`.
+118 focused mocked-ROS navigation, supervisor and readiness tests passed using
+local temporary OpenCV 4.12.0 / NumPy 2.2.6 dependencies. This is not a new live
+ROS or physical validation. No robot or Git operations occurred during rollback.
+A fresh Go is required before a confirmation run; remaining minor drift is not
+claimed fixed.
+
+Run `20260909T172430Z-junction-straight-restored-baseline-b7dbc3de`
+confirmed the rollback. The user observed a straight approach, red-line stop,
+minor departure oscillation without a boundary crossing, smooth outgoing-lane
+centring, and a centred stop. The controller completed the junction in 12.25
+seconds. Both encoders recorded 867 ticks over the supervised window; camera
+data remained fresh, final feedback was zero, and normal wheel ownership was
+restored. Straight intersection traversal is provisionally accepted for this
+approach and lighting.
+
+The next supervised milestone is the left exit from the same intersection.
+Its isolated profile remains provisional: 0.5 seconds of straight entry,
+followed by left/right wheel requests of 0.03/0.15 for the calibrated phase and
+while markings remain absent. It requires both outgoing borders and stable lane
+error before route progress. Camera freshness, encoder-stall detection,
+publisher ownership, the crossing deadline, manual stop, and final zero remain
+active. No physical left-intersection result is claimed yet.
+
+Run `20260909T173044Z-junction-left-first-7154a416` failed its outgoing-lane
+deadline. The user observed a slight rightward approach drift, the expected red
+stop, the beginning of a left turn, decreasing physical speed, and then a
+stop before the turn completed. Telemetry shows the 0.03/0.15 turn request
+continued through missing markings; this was not a lane-loss or encoder-stall
+stop. Both outgoing borders first became usable about 2.9 seconds into the
+three-second search, leaving only about 0.1–0.2 seconds before the fault and
+less than the required 0.3-second confirmation. Final feedback was zero and
+normal ownership was restored.
+
+The supervised left profile now uses the proven row-matched approach steering
+before the red line, a five-second left-only outgoing search allowance, and the
+unchanged 0.03/0.15 left-turn pair. When outgoing borders appear, alignment
+normalizes its faster wheel to the profile's established 0.15 cap instead of
+leaving both requests near the unreliable 0.09 range. Ordinary launchers and
+the accepted straight-intersection settings are unchanged. This remains an
+unverified left-intersection candidate until a new supervised run passes.
+
+### 2026-09-09: reject premature left-intersection handoff
+
+Run `20260909T173938Z-junction-left-approach-and-reacquire-fix-a45eeed8`
+failed. The user observed an improved straight approach, the normal red stop,
+and the desired gradual left turn, followed by slowing and an unwanted right
+turn halfway across the intersection. Final wheel feedback was zero and normal
+publisher ownership was restored. The supervisor reported lane loss at 8.55
+seconds of its supervised window; camera freshness remained within the limit.
+
+The controller accepted centroid detections for 0.3 seconds as an outgoing lane,
+then advanced the route and commanded right steering. The synchronized frame
+still looked across the intersection. Its matched-row geometry reported no valid
+corridor or near-field support; occasional isolated far-row pairs were insufficient.
+The wheel requests changed from 0.03/0.15 to roughly 0.187/0.03 before lane-loss
+stopping. This establishes a premature visual handoff and commanded reversal of
+steering. It does not establish a separate hardware cause for perceived slowing.
+
+For the opt-in visual junction test, left-turn reacquisition now requires the
+existing matched-row corridor, near support, heading and lateral limits, and
+stability interval. Without a nearby corridor and acceptable heading it retains
+the authorized 0.03/0.15 arc. Once heading is acceptable, matched-row visual
+centering can take over at the profile's outer-wheel cap; lateral alignment must
+also stabilize before route advancement. The five-second search and total
+session deadline remain; failure to find the lane still stops the maneuver.
+The accepted straight crossing and ordinary launcher settings are unchanged.
+
+124 focused navigation, supervisor and readiness tests passed. Replaying 24
+recorded perception/status samples through the revised search retained the left
+arc and rejected the original premature handoff. Regression tests cover distant
+fragments, diagonal corridors, interrupted confirmation, alignment power,
+deadline stopping and lane loss after completion. Replay is not a prediction of
+the new camera trajectory. No new isolated live-ROS validation, physical run or
+Git operation occurred during this fix; left-intersection success is pending.
+
+### 2026-09-09: tighten the guarded left arc
+
+Run `20260909T174803Z-junction-left-guarded-reacquisition-0779e499`
+had the best left-intersection behavior so far by the user's observation:
+centered approach, normal red stop, and smooth left turning, but insufficient
+curvature. It stopped facing the white corner rather than the outgoing lane.
+The saved final image supports that observation. During search the controller
+held 0.03/0.15, with no valid matched-row outgoing corridor and no premature
+completion. It stopped on the five-second search deadline at 11.61 seconds of
+the supervised window. Camera age was 0.040–0.146 seconds; final and post-stop
+feedback were zero, and normal kinematics ownership was restored. This remains
+a failed traversal, not a failed stopping test.
+
+The next test-only left profile uses center speed 0.105 and bias 0.075,
+requesting left/right 0.03/0.18. The commanded difference increases from 0.12
+to 0.15 (25%); this is not a measured 25% increase in physical curvature.
+The inner wheel keeps its rolling command. The opt-in left entry is capped at
+the existing 0.09 base speed, so its 0.5-second straight entry is unchanged.
+Visual alignment uses the new outer-wheel cap. Approach steering, red threshold,
+search and session deadlines, corridor acceptance, and independent stopping
+checks are unchanged. No timeout extension or zero-inner-wheel pivot was added.
+
+125 focused navigation, supervisor and readiness tests passed, including the
+new turn pair, unchanged entry, continuous unmarked arc, alignment output cap,
+and deadline stopping. No physical run or Git operation occurred during this
+adjustment. Its turning radius and road containment require a fresh supervised
+test; replay alone cannot establish the trajectory produced by increased power.
+
+### Pending: bounded sharp right from an unmarked intersection
+
+The sharp right after a red-line stop is implemented as a junction phase rather
+than the ordinary road-corner detector. The road-corner detector requires a
+yellow divider and is therefore intentionally disabled during junction tests.
+After the red stop and two-second dwell, the right profile drives straight for
+the existing 0.5-second entry, then commands the proven right-pivot pair:
+left wheel 0.20 and right wheel 0.00. Missing yellow and white markings are
+expected during this authorized, bounded phase.
+
+The pivot no longer hands off merely because a colour fragment appears. It must
+first find a nearby matched-row outgoing corridor with acceptable heading and
+lateral alignment for the configured stability interval. Until then, it keeps
+the selected pivot. Once this evidence appears, regular visual lane centering
+takes over. A five-second outgoing-lane search deadline and the total
+15-second supervisor deadline remain. Fresh camera data, encoder-stall
+detection, publisher ownership, manual stop, watchdog and final zero remain
+mandatory. No physical right-intersection result is claimed yet.
+
+127 focused navigation, supervisor and readiness tests passed. The new cases
+cover false or distant corridor fragments, diagonal corridor rejection,
+continuous right pivot during missing markings, stable outgoing-lane handoff,
+and deadline stopping. No robot movement or Git operation occurred while
+preparing this test.
+
+### 2026-09-09: right entry follows the white-boundary end
+
+Run `20260909T180059Z-junction-right-bounded-pivot-ca318c57` stopped
+with left-encoder stall detection at 7.03 seconds. The user observed a normal
+approach and red stop, but the right pivot started before a wheel reached the
+red line. The previous implementation used a fixed 0.5-second entry; it did
+not wait for the incoming white boundary to disappear. Final wheel feedback
+was zero and normal control was restored. Changing entry timing does not prove
+that the observed pivot stall is resolved.
+
+The opt-in right-junction entry now requires an observed white boundary followed
+by 0.15 seconds of continuous absence. It then travels straight at the existing
+base command for one second before requesting 0.20/0.00. White reappearance
+before pivoting resets the absence/clearance sequence. No yellow marking is
+required during this authorized crossing. Time spent waiting or clearing does
+not consume the minimum pivot interval or the search timer. The existing
+wall-clock and supervisor deadlines still include the entire maneuver.
+
+The supervisor checks the new entry-policy diagnostic before release, preventing
+an older fixed-entry controller from running this test. Added entry-stage status
+distinguishes waiting for the white boundary, confirming its disappearance,
+forward clearance and pivot start. 129 focused tests passed, including observed
+boundary loss, flicker reset, the full clearance interval, no premature search,
+and deadline stopping without an observed boundary. No robot or Git operations
+occurred during this change. Physical entry clearance and pivot completion
+remain unverified until a fresh Go.
+
+### 2026-09-09: shorten right-entry clearance
+
+Run `20260909T180713Z-junction-right-white-end-entry-53ffb7eb` executed
+the boundary-based entry, but the user observed excessive forward travel before
+the pivot. Status timing relative to departure shows white loss around 1.8 s,
+forward clearance around 1.9 s, and pivot start around 3.0 s. The additional
+one-second advance compounded the distance already travelled while waiting for
+the white boundary to disappear. The saved pivot-start frame shows cross-lane
+red/yellow markings in view.
+
+Those markings did not stop the run: it remained in turning/searching with
+0.20/0.00 requested and no red-stop latch. The supervisor stopped for left-wheel
+stall at 8.88 s of its window. Final feedback was zero and normal ownership was
+restored. This is evidence of missing encoder progress under command, not proof
+of the underlying mechanical or electrical cause.
+
+Reduced only the opt-in right clearance from 1.0 s to 0.25 s after the existing
+white-loss confirmation. This should initiate pivot approximately 0.75 s earlier
+for the same incoming detections; the changed physical path still needs testing.
+The supervisor verifies both the revised policy and duration before release.
+129 focused tests passed, including the revised timing bounds, flicker handling,
+pivot/search sequencing and stopping regressions. No physical or Git operations
+occurred. The repeated pivot stall remains unresolved; its safeguard was not
+weakened and no claim of successful right traversal is made.
+
+### 2026-09-09: end the right pivot on a visible outgoing corridor
+
+Run `20260909T181223Z-junction-right-short-clearance-4bf0fa77` had the
+user's accepted entry and turning path, but continued turning past the intended
+outgoing lane. It stopped on outgoing-lane timeout at 13.27 s. Camera and encoder
+feedback remained healthy; final output was zero and normal ownership restored.
+The user observed the robot centered in front of the intended lane before it
+overturned. This is failed handoff, not accepted intersection completion.
+
+Recorded geometry detected three ordered yellow/white pairs at ROI fractions
+0.18, 0.36 and 0.54 while the lane was ahead. The old visual-steering gate required
+near support at 0.72 and heading error below 0.08. At the first near-supported
+sample the heading error was -0.0839, so pivoting continued. A brief visual
+handoff followed, but loss of near support restarted the pivot. The saved
+frame-00069 visibly shows the intended outgoing corridor.
+
+Changed only the opt-in right-turn visual handoff: after the unchanged minimum
+pivot and departure-red clearance, three paired rows spanning at least 0.36
+and reaching 0.54, with lateral/heading errors below 0.15, must persist for
+0.10 s. This latches visual entry using the existing row-based steering and
+alignment wheel cap. Near-row gaps cannot resume fixed pivoting. Loss of all
+usable row geometry after the latch faults to zero rather than pivoting blindly.
+The original strict near-field alignment/stability checks still govern route
+advancement; search and overall deadlines remain unchanged.
+
+Preserved white-loss confirmation, 0.25 s clearance, 0.20/0.00 pivot commands,
+minimum pivot duration, colour thresholds, and straight/left controllers.
+Added `junction_right_visual_entry` status evidence. Recorded-geometry replay
+switches at monotonic 21974.9479, before the previous brief handoff around
+21975.3454, without advancing the route. Replay is not a simulation of the changed
+physical path. 131 focused navigation, supervisor and first-test-readiness tests
+pass, including midfield recognition, flicker, near-row dropout, complete visual
+loss and stable completion. No live ROS integration run, robot movement or Git
+operation occurred during this fix. Physical lane entry remains pending a Go.
+
+### 2026-09-09: pivot stopped before outgoing handoff was reached
+
+Run `20260909T182312Z-junction-right-outgoing-handoff-285af70e` failed
+before testing the revised handoff. The user observed less than about one second
+of turning, followed by stationary motor sound. Status remained `crossing` /
+`turning`, with `junction_right_visual_entry=false` throughout. There was no
+navigation fault or red-stop latch at the failure; the camera remained fresh.
+
+Relative to movement release, pivot output began around 7.15 s. The left encoder
+ceased advancing around 7.4 s, while acceleration was still raising the left
+command toward 0.20; the right command was zero. By 7.93 s, stable motor-register
+snapshots showed channel-8 PWM 1584/4096 and channel-13 PWM zero, identical to the
+earlier sustained pivot in `20260909T181223Z-junction-right-short-clearance-4bf0fa77`.
+The left count remained unchanged through 8.2 s. The supervisor stopped at
+approximately 8.23 s for missing left encoder progress. Final zero feedback and
+restored normal publisher ownership were verified by the run report.
+
+This is an intermittent pivot-start failure, not evidence that outgoing-lane
+detection ended the pivot prematurely. Register agreement confirms programmed
+output, not delivered motor current or torque. The existing acceleration ramp
+leaves the outside wheel below full pivot command for roughly 0.7 s after the
+inside wheel is stopped; this is a diagnostic hypothesis, not an established
+root cause. The successful comparison also used this ramp. Do not infer a
+hardware defect or blame placement from these records.
+
+Retain the handoff change, entry timing, wheel caps and stall safeguard. No
+movement-code change is justified by this comparison alone. A separately
+authorized bounded pivot-start diagnostic is needed before claiming a physical
+fix; compare ramp behavior and encoder progress without changing lane detection
+at the same time. No new physical test or Git operation occurred during review.
+
+### 2026-09-09: prepared direct-start pivot diagnostic (not yet run)
+
+Added the explicit `-GroundStrongPivot` launcher option: fixed 0.20 left /
+0.00 right, at most two seconds, through the existing supervised fixed-output
+path. It starts directly at that pair rather than using the follower's
+acceleration ramp. Ordinary launchers and intersection logic are unchanged.
+The runner and robot supervisor independently reject durations above two
+seconds; profile combinations and missing Go are rejected. The Windows launcher
+defaults this option to two seconds. Without Go it performs only a startup check.
+
+After fresh user authorization, from the repository in Windows PowerShell:
+
+```powershell
+.\tools\Start-Duck2-GroundTest.ps1 -GroundStrongPivot -Duration 2 -Label pivot-direct-start -Go
+```
+
+Place duck2 upright on the same track surface in a clear area with room for a
+two-second right pivot, camera uncovered and cable slack. This is not an
+intersection traversal or a lane-contained maneuver. Observe whether the left
+wheel starts immediately, maintains rotation, and stops promptly; the right
+wheel should remain unpowered. No automatic retry follows. Existing camera
+freshness, ownership checks, encoder-stall stop, independent watchdog, explicit
+zero, restoration and verified evidence-copy procedure remain active.
+
+Compare requested/executed commands, encoder progress and motor registers with
+the failed ramped start. A successful direct start supports further investigation
+of the ramp but does not isolate it causally: placement, elapsed running time and
+starting from rest differ. A failure must not cause automatic power escalation
+or removal of stall detection. Preserve raw evidence outside the repository.
+
+165 focused session, supervisor, navigation and readiness tests passed; Windows
+launcher syntax parsed successfully. The startup-success text emitted by the
+session tests is mocked, not a live connection verification. No robot connection,
+movement or Git operation occurred during preparation.
+
+### 2026-09-09: direct-start pivot also failed; ramp is not required for failure
+
+Run `20260909T183231Z-pivot-direct-start-6ae2d656` sent constant
+0.20/0.00 directly through the supervised fixed-command path. The user heard
+motor-like beeping and observed no movement. Both encoder deltas were zero.
+The supervisor stopped at 1.095 s for left-wheel stall, before the two-second
+deadline. Final zero feedback and normal ownership were restored; 17 frames
+and telemetry were copied and verified outside the repository.
+
+Stable register snapshots during the command show left PWM 1584/4096, forward
+direction, and right PWM zero, matching the previous successful pivot. A fresh
+read-only inspection of the installed Dagu driver and HATv3 source confirms
+that 0.20 maps to floor(0.20 * 195 + 60) = 99, then 99 * 16 = 1584.
+The HAT frequency setup is 1600 Hz. No installed source was changed or hardware
+driver object instantiated. Commands/registers are not measurements of motor
+current or supply voltage.
+
+This failure occurred without the follower or its ramp, and therefore cannot
+be fixed merely by removing that ramp or relaxing outgoing-lane recognition.
+The specific cause below the programmed-output layer remains unresolved. Do
+not label it a confirmed mechanical obstruction, hardware defect, or low
+battery. No movement-code change or automatic power escalation is supported
+by this test alone. Next useful isolation is the same short command with the
+wheels lifted, under new authorization, to distinguish current unloaded response
+from the failed loaded start. Historical lifted tests do not measure the current
+condition. Stop after that test for observation; do not retry automatically.
+
+No new movement, motor-service call, ROS installation change or Git operation
+occurred during this diagnosis. The outgoing handoff fix remains pending a
+physical run that actually reaches its activation conditions.
+
+### 2026-09-09: right handoff was incorrectly gated behind the pivot timer
+
+Run `20260909T183700Z-junction-right-handoff-retry-ff6c45c6` reproduced
+overturning. The user accepted the approach, clearance and turn path, but saw
+nearly 180 degrees of rotation instead of entry into the visible outgoing lane.
+The supervisor ultimately stopped on left encoder stall at 10.624 s of the
+motion window (including red dwell); this is not continuous driving duration.
+Final zero feedback and restored ownership were verified; 84 frames retained.
+
+Recorded lane geometry at 7.71 and 7.81 s already met the visual-entry criteria:
+three ordered paired rows through ROI fraction 0.54, span 0.36, lateral errors
+0.1101/0.0708 and heading errors -0.1250/-0.1109. Frame-00067 confirms the
+outgoing corridor. However, navigation called the handoff helper only after
+the fixed 1.6-second pivot interval, around 8.1 s. By the next confirmation
+sample the lateral error exceeded 0.15, so the latch never activated. The prior
+helper-focused replay missed this enclosing state-machine timing gate.
+
+The opt-in right controller now evaluates stable corridor entry during the
+pivot, after 0.30 s initial pivot progress and departure-red clearance. Its
+existing 0.10 s confirmation and geometry bounds remain. A confirmed corridor
+transitions to visual reacquisition immediately, which persists even before the
+old pivot interval expires. Strict near-field stability still governs route
+advancement. Without a qualifying corridor the original timed search behavior
+remains; deadlines and stall protection remain authoritative.
+
+Preserved approach, white-loss detection, 0.25 s forward clearance, 0.20/0.00
+pivot target, wheel acceleration, color values, and straight/left logic. Added
+state-machine tests for the recorded early corridor, subsequent visual control,
+departure-line rejection and deadline stopping. 167 focused tests passed.
+Test startup-success output is mocked, not a new live check. No physical test,
+robot change or Git operation occurred during this fix. Earlier intermittent
+pivot-start stalls remain a separate unresolved limitation.
+
+### 2026-09-09: passable right traversal; minor tracking trim
+
+The user assessed `20260909T184145Z-junction-right-early-handoff-33cfe494`
+as passable: no boundary crossing, with rightward drift during approach,
+departure and outgoing alignment, followed by a left correction near the white
+border. Preserve this physical assessment. Software completion did not pass:
+at 12.302 s including dwell, geometry loss after visual entry caused a fault.
+Camera remained fresh; zero feedback and normal ownership were restored.
+The passable node SHA256 is
+`bdd803e20961301ccda61ffdfdef048347b3a0e655ca9e2a2a1b39e701b27719`;
+the run's staged source and recorded settings remain on the robot.
+
+The initial command was approximately 0.1004/0.0796, a right correction from
+row geometry. Global steering trim is not used in this approach. Forward entry
+requested equal 0.09/0.09, so its reported drift is not proof of a commanded
+differential. At visual handoff the inner wheel ramp took about 0.9 s to catch
+the outer wheel, prolonging right rotation. Avoid a broad retune of this accepted
+path; retain acceleration limits and outgoing detection for this small trial.
+
+Added optional `junction_right_tracking_trim`, default zero, validated within
+[0, 0.01]. Only the bounded right-junction test sets 0.003. It subtracts 0.003
+from the left request and adds 0.003 to the right during approach, forward entry
+and visual alignment, respecting the active-wheel floor and cap. Forward entry
+therefore requests 0.087/0.093; an initial 0.1004/0.0796 becomes 0.0974/0.0826.
+Clipping may reduce the applied correction. This is provisional compensation,
+not measured motor calibration or a guarantee of centered travel.
+
+The zero-inner-wheel pivot is excluded. Pivot strength, clearance, recognition,
+handoff stability, deadlines, stops, ordinary launchers and left/straight tests
+are unchanged. Status exposes the trim. Set it to zero to recover the previous
+tracking behavior. 169 focused tests passed, including trim scope, stop/pivot
+exclusion, wheel bounds and forward-entry behavior. Startup test output is
+mocked. No physical test, robot change or Git operation occurred during tuning.
+
+### 2026-09-09: remove trial trim and preserve steering during right handoff
+
+The user reported `20260909T184746Z-junction-right-small-trim-188a3ad5`
+still drifted right, then corrected left and crossed the yellow divider. Unlike
+the previous passable run, this is failed physical containment. The supervisor
+stopped for corridor loss at 11.945 s including dwell; camera stayed fresh and
+final output was zero. Evidence was verified locally (88 frames).
+
+At visual entry, published commands were approximately 0.197/0.016; the right
+wheel ramp took about one second to catch up. Independent increase limits
+preserved the previous pivot's outer-wheel power, so actual steering initially
+differed substantially from the visual request. The small constant trim did
+not address this transient. It is disabled in the bounded preset (parameter
+zero); ordinary launchers already default to zero.
+
+Only during opt-in right visual reacquisition, publication now applies a common
+scale to both positive wheel requests when either increase would exceed the
+existing acceleration limit. This preserves the desired wheel ratio while
+respecting each wheel's increase limit and immediate stopping. It can reduce
+the outer wheel during inner-wheel startup; physical restart speed remains
+unverified. Fixed pivot, approach/clearance timing, perception gains and left/
+straight handling remain unchanged.
+
+Saved frames also show approach to the next red line while still reacquiring;
+red was visible from approximately 11.4 s but ignored as intersection evidence.
+After right visual entry and 0.30 s of a continuous valid near-field corridor
+with red absent, subsequent red detection now latches zero with alignment
+incomplete. It does not advance the route or authorize another intersection.
+The existing red threshold is unchanged. A flickering corridor or persistent
+cross-traffic red cannot arm this check. New status records rearming.
+
+172 focused tests passed, including ratio-preserving acceleration, immediate
+stop, stable red rearming, and rejection of red/geometry flicker. No live test,
+robot modification or Git operation occurred. This addresses demonstrated
+command-transient and stop-state faults; a successful physical correction is
+not yet established, and the earlier intermittent pivot stall remains separate.
+
+### 2026-09-09: bounded encoder assistance for right outgoing alignment
+
+Run `20260909T185435Z-junction-right-ratio-ramp-a06ea30f` improved entry by
+the user's observation, but subsequently crossed the yellow boundary to the
+left. This remains failed physical containment. Corridor loss stopped the run
+at 12.377 seconds including dwell; final zero and restored normal ownership
+were recorded. The downloaded evidence contains 92 frames.
+
+During late alignment the camera requested right correction, approximately
+0.20 left / 0.12 right, while a one-second encoder interval showed 111/103
+ticks. Similar wheel rotation despite unequal requests suggests weak realized
+correction; it does not establish calibrated ground heading or motor speed.
+
+Added opt-in `junction_right_encoder_assist` (default false), enabled only in
+the bounded right-junction preset. During visual reacquisition with trustworthy
+geometry and fresh, closely timed encoder samples, a 0.25-second measurement
+window compares normalized wheel-count differential with the requested
+differential. This command ratio is a provisional reference, not a calibrated
+velocity model. Insufficient differential reduces the slower requested wheel
+by at most 0.015 while respecting its active floor; outer-wheel power is never
+increased. The adjustment is proportional and does not accumulate.
+
+Straight requests, direction changes, steering resets, invalid geometry,
+stale/reset counters and other driving phases clear the assistance. Stationary
+or implausibly jumping counters receive no new compensation. Existing stall,
+freshness, ownership and watchdog stopping remain active. Approach, clearance,
+fixed pivot and ordinary launchers are unchanged; constant trim remains zero.
+Status exposes whether assistance is enabled and its current adjustment.
+
+174 focused offline tests passed, covering bounded directional assistance,
+reset/stale data, adequate measured correction, stall and pivot exclusion,
+alongside navigation, supervisor, session and readiness regressions. Session
+startup messages in this suite are mocked, not live verification. Physical
+effectiveness remains unverified. No movement or Git operations occurred.
+
+### 2026-09-09: restore right outgoing-alignment steering authority
+
+Run `20260909T190400Z-junction-right-encoder-assist-59674638` failed physical
+containment: the user observed departure from the pivot still pointing left,
+then travel over the outgoing yellow boundary without sufficient correction.
+The supervisor stopped for outgoing corridor loss at 11.817 seconds including
+dwell. Camera age was 0.053–0.253 seconds; zero feedback and restored normal
+ownership were confirmed. All 89 downloaded frames were verified.
+
+Recorded geometry at visual entry had lateral error approximately 0.077 and
+heading error -0.112. Later values reached 0.399/-0.034. These are normalized
+image estimates, not physical angles. The controller requested right steering,
+and encoder assistance reached its 0.015 bound, but containment still failed.
+
+Code review identified asymmetric saturation in right visual alignment:
+`straight_visual_wheels(cap)` treated the outer-wheel cap as centre speed.
+For steering -0.08 with cap 0.20, mixing yielded 0.28/0.12 and clipping yielded
+0.20/0.12, halving the requested differential. The subsequent scaling did not
+restore it. This weakens camera correction after early visual pivot exit.
+
+Only right outgoing visual alignment now reserves steering headroom: centre
+speed is outer cap minus absolute steering, then wheels are centre minus/plus
+steering. The same example produces 0.20/0.04. Steering is bounded by the
+existing 0.03 active-wheel floor (maximum differential 0.17 at cap 0.20).
+Equal requests remain 0.20/0.20; encoder assistance and the ratio-preserving
+acceleration limit remain bounded. No extra fixed pivot time, perception/gain
+change, constant trim, increased outer power or reduced stopping protection
+was introduced. Left/straight junction control and approach are unchanged.
+
+175 focused offline tests passed. Added regression cases use recorded
+alignment errors, mirrored errors, straight alignment and both flip settings;
+they verify full attainable differential, the floor and outer cap. Existing
+handoff, acceleration, stop, supervisor and session checks passed. This fixes
+the demonstrated wheel-mixing defect; physical alignment remains unverified.
+No new movement, robot deployment or Git operations occurred during this fix.
+
+### 2026-09-09: right crossing accepted and continuous mode prepared
+
+Run `20260909T190932Z-junction-right-full-alignment-4509f484` stopped at
+12.630 seconds when the next red line appeared before software alignment had
+completed. The user accepted the physical result as passable: duck2 remained
+inside both outgoing boundaries, although it entered with a visible leftward
+heading and did not fully centre. This is a passable individual crossing, not
+proof of a repeatable or continuous route. Camera age was 0.062–0.166 seconds,
+final zero was confirmed, normal ownership was restored and 93 frames were
+preserved.
+
+Added `lane-continuous`, which combines the current tested lane settings,
+automatic red-line dwell/crossing, direction-specific junction profiles and
+sharp-right road-bend recognition. Smooth curves remain under ordinary visual
+lane following. Sharp-right recognition is now permitted with route mode only
+while navigation is in `following`; it cannot activate during a red stop,
+crossing or junction reacquisition. Obstacle detection and passing are disabled.
+
+The Windows companion now sends a confirmed A* route and Continue through the
+high-level gateway, displays live status and offers a direct Stop. Free-form
+live chat is disabled. The gateway adds ROS wheel-publisher ownership to status,
+and the desktop rejects Start unless the lane follower is the sole publisher.
+The selected destination red line, camera/lane faults, encoder stalls,
+heartbeat loss, ownership conflict and maneuver deadlines still stop motion.
+
+191 focused controller/app tests and one native Windows UI lifecycle test
+passed. The broader non-ROS suite ran 342 tests with four platform skips; its
+only load error was the expected absence of `rospy` outside the project image.
+No continuous physical route was run, no robot runtime was changed, and no Git
+operation occurred.
+
+For continuous routes, a right exit may lead quickly to the next red line. Once
+the existing right-turn guard has observed a valid near-field outgoing corridor
+for 0.30 seconds with the departure red cleared, a subsequent red line now
+commits exactly one route edge and becomes the next junction stop (or the final
+destination). It records `reacquired_at_next_red` with alignment
+`contained_not_settled`. Red seen before that stable corridor still cannot
+advance the route. Tests cover final and intermediate destinations and prevent
+one persistent red image from advancing twice.

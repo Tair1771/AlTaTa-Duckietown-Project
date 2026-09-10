@@ -7,7 +7,8 @@ it is not a robot-camera calibration image.
 
 ## Current behaviour
 
-The default launchers still stop and latch for obstacle candidates. Passing is
+The experimental node can stop and latch for obstacle candidates. The current
+continuous and bench launch modes explicitly disable obstacle handling. Passing is
 **disabled by default**. The offline chatbot recognizes obstacle reports and
 passing requests, but does not enable the controller or send a new command.
 

@@ -167,11 +167,13 @@ class GroundSupervisorTests(unittest.TestCase):
         MODULE.validate_fixed_turn(2.0, .15, .03)
         MODULE.validate_fixed_turn(2.0, .15, .15)
         MODULE.validate_fixed_turn(2.0, .20, .03)
+        MODULE.validate_fixed_turn(2.0, .20, 0.0)
         for values in [(8.01, .03, .15), (3.0, .04, .15),
                        (3.0, .03, .14), (2.01, .15, 0.0),
                        (2.0, .15, .01), (2.01, .15, .03),
                        (2.01, .15, .15),
-                       (2.01, .20, .03),
+                       (2.01, .20, .03), (2.01, .20, 0.0),
+                       (2.0, .21, 0.0),
                        (2.0, .20, .04), (True, .03, .15)]:
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
@@ -359,9 +361,28 @@ class GroundSupervisorTests(unittest.TestCase):
                 MODULE.apply_junction_preset(args)
                 self.assertFalse(args.sharp_corner_enabled)
                 self.assertEqual(MODULE.JUNCTION_TEST_ROUTES[turn], expected_routes[turn])
-                self.assertEqual(args.junction_straight_speed, .09)
+                self.assertEqual(args.junction_straight_speed, .15)
+                self.assertEqual(args.junction_straight_approach_max_steering, .03)
+                self.assertTrue(args.junction_straight_visual_approach)
+                self.assertEqual(args.junction_straight_lane_target_fraction, .49)
+                self.assertEqual(args.junction_straight_lateral_gain, .25)
+                self.assertEqual(args.junction_straight_heading_gain, .30)
+                self.assertEqual(args.junction_straight_reacquire_seconds, .50)
+                self.assertEqual(args.junction_straight_settle_seconds, .60)
+                self.assertTrue(args.junction_straight_encoder_balance)
+                self.assertEqual(args.junction_straight_encoder_balance_gain, .12)
+                self.assertEqual(args.junction_straight_encoder_balance_max, .015)
+                self.assertEqual(args.junction_straight_encoder_balance_min_ticks, 12.)
+                self.assertEqual(args.junction_reacquire_timeout,
+                                 {"straight": 9.0, "left": 5.0,
+                                  "right": 5.0}[turn])
+                self.assertEqual(args.junction_reacquire_max_error,
+                                 .10 if turn == "straight" else .35)
+                self.assertEqual(MODULE.junction_post_reacquire_seconds(turn),
+                                 0.0 if turn == "straight" else 1.0)
+                self.assertEqual(args.duration, 15)
                 self.assertEqual((args.junction_left_speed, args.junction_left_bias),
-                                 (.09, .06))
+                                 (.105, .075))
                 self.assertEqual((args.junction_right_speed, args.junction_right_bias),
                                  (.10, .10))
         for value in (.64, .95, math.nan, math.inf):
@@ -369,6 +390,40 @@ class GroundSupervisorTests(unittest.TestCase):
             args.red_stop_trigger_bottom_fraction = value
             with self.assertRaises(ValueError):
                 MODULE.apply_junction_preset(args)
+
+    def test_straight_release_rejects_old_search_timeout(self):
+        from unittest.mock import patch
+        args = MODULE.parse_args(["--junction-turn", "straight", "--duration", "15"])
+        MODULE.apply_junction_preset(args)
+        fields = ("entry_seconds", "straight_seconds", "left_seconds", "right_seconds",
+                  "reacquire_timeout", "reacquire_max_error",
+                  "straight_speed", "straight_approach_max_steering",
+                  "straight_visual_approach", "straight_lane_target_fraction",
+                  "straight_lateral_gain", "straight_heading_gain",
+                  "straight_departure_max_heading",
+                  "straight_reacquire_max_lateral",
+                  "straight_reacquire_max_heading", "straight_reacquire_seconds",
+                  "straight_settle_max_lateral", "straight_settle_max_heading",
+                  "straight_settle_max_steering", "straight_settle_seconds",
+                  "straight_encoder_balance", "straight_encoder_balance_gain",
+                  "straight_encoder_balance_max",
+                  "straight_encoder_balance_min_ticks",
+                  "left_speed", "right_speed",
+                  "left_bias", "right_bias")
+        status = dict(route_enabled=True, junctions_calibrated=True,
+                      sharp_corner_enabled=False, red_stop_trigger_bottom_fraction=.86,
+                      route=["A", "B", "C"], route_index=1, state="following",
+                      manual_stop=False,
+                      junction_settings={f: getattr(args, "junction_" + f) for f in fields})
+        with patch.object(MODULE, "require_camera_guided_mode"):
+            MODULE.require_junction_mode(status, "straight", .86)
+            status["junction_settings"]["reacquire_timeout"] = 3.0
+            with self.assertRaisesRegex(RuntimeError, "reacquire_timeout"):
+                MODULE.require_junction_mode(status, "straight", .86)
+            status["junction_settings"]["reacquire_timeout"] = 9.0
+            status["junction_settings"]["reacquire_max_error"] = .35
+            with self.assertRaisesRegex(RuntimeError, "reacquire_max_error"):
+                MODULE.require_junction_mode(status, "straight", .86)
 
     def test_fifteen_second_watchdog_stops_at_deadline_without_real_wait(self):
         clock = FakeClock()
@@ -434,6 +489,11 @@ class GroundSupervisorTests(unittest.TestCase):
             "junction_last_result": {"outcome": "reacquired", "turn": "left"},
         }
         self.assertTrue(MODULE.junction_completion_status(status, "left"))
+        self.assertFalse(MODULE.junction_completion_status(status, "straight"))
+        straight = dict(status, junction_settled=True)
+        straight["junction_last_result"] = {
+            "outcome": "reacquired", "turn": "straight"}
+        self.assertTrue(MODULE.junction_completion_status(straight, "straight"))
         self.assertFalse(MODULE.junction_completion_status(status, "right"))
         self.assertFalse(MODULE.junction_completion_status(
             dict(status, route_index=1), "left"))
@@ -449,6 +509,68 @@ class GroundSupervisorTests(unittest.TestCase):
             MODULE.command_acknowledged([{"last_command": {
                 "id": "junction-continue-left", "accepted": False,
                 "reason": "test rejection"}}], "junction-continue-left")
+
+    def test_junction_continue_waits_for_fresh_complete_incoming_lane(self):
+        route = MODULE.JUNCTION_TEST_ROUTES["straight"]
+        ready = {
+            "camera_valid": True, "camera_age": .08,
+            "lane_both_visible": True, "lane_error": .03,
+            "red_stop": False, "fault": None,
+            "state": "following", "manual_stop": True,
+            "route": route, "route_index": 1,
+        }
+        self.assertTrue(MODULE.junction_continue_ready(ready, route))
+        for change in (
+                {"camera_valid": False}, {"camera_age": .5},
+                {"camera_age": float("nan")}, {"lane_both_visible": False},
+                {"lane_error": None}, {"red_stop": True},
+                {"fault": "test"}, {"manual_stop": False},
+                {"route": ["A", "D", "C"]}, {"route_index": 0}):
+            with self.subTest(change=change):
+                self.assertFalse(MODULE.junction_continue_ready(
+                    dict(ready, **change), route))
+
+    def test_supervised_junction_does_not_publish_continue_before_camera_ready(self):
+        # The real node publishes an initial status before it accepts commands.
+        statuses = [{"last_command": None}]
+        published = []
+        route = MODULE.JUNCTION_TEST_ROUTES["straight"]
+        publisher = SimpleNamespace(get_num_connections=lambda: 1)
+
+        def publish(_rospy, _String, _publisher, command, repeats=3):
+            published.append(command["action"])
+            status = {"last_command": {
+                "id": command["id"], "accepted": True, "reason": "Applied"}}
+            if command["action"] == "set_route":
+                status.update({
+                    "camera_valid": False, "camera_age": None,
+                    "lane_both_visible": False, "lane_error": None,
+                    "red_stop": False, "fault": None,
+                    "state": "following", "manual_stop": True,
+                    "route": route, "route_index": 1,
+                })
+            statuses.append(status)
+
+        holds = []
+        def hold():
+            holds.append(True)
+            if (published == ["set_route"] and len(holds) >= 3
+                    and not MODULE.junction_continue_ready(statuses[-1], route)):
+                statuses.append({
+                    "camera_valid": True, "camera_age": .06,
+                    "lane_both_visible": True, "lane_error": .02,
+                    "red_stop": False, "fault": None,
+                    "state": "following", "manual_stop": True,
+                    "route": route, "route_index": 1,
+                    "last_command": statuses[-1]["last_command"],
+                })
+
+        with patch.object(MODULE, "publish_json_command", side_effect=publish), \
+                patch.object(MODULE.time, "sleep", return_value=None):
+            MODULE.configure_supervised_junction(
+                object(), object(), publisher, statuses, "straight", hold)
+        self.assertEqual(published, ["set_route", "continue"])
+        self.assertGreaterEqual(len(holds), 3)
 
     def test_camera_guided_release_rejects_old_or_misconfigured_node(self):
         for status in ({}, {"smooth_steering_deadband": False},

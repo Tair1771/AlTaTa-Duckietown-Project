@@ -1,5 +1,8 @@
 # Right-bend restart diagnosis — 2026-09-09
 
+Historical diagnosis; later accepted trials are recorded in [TESTING](TESTING.md).
+Use [STARTUP](STARTUP.md) for current launch instructions, not older presets below.
+
 ## Current reviewed trial (supersedes earlier presets below)
 
 Latest: see [the equal-wheel and sharp-turn diagnosis](TURNING_DIAGNOSIS.md).

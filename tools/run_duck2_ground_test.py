@@ -356,6 +356,9 @@ def confirmed_stop_from_log(output):
 def diagnostic_profile(args):
     """Return the explicitly selected bounded diagnostic profile."""
     selected = []
+    if getattr(args, "ground_strong_pivot", False):
+        selected.append(("ground_strong_pivot",
+                         ["--fixed-left", "0.20", "--fixed-right", "0.0"]))
     if getattr(args, "ground_right_pivot", False):
         selected.append(("ground_right_pivot",
                          ["--fixed-left", "0.15", "--fixed-right", "0.0"]))
@@ -541,6 +544,8 @@ def parse_args(argv=None):
                         help="Short description such as left-curve-to-straight")
     parser.add_argument("--duration", type=float, default=15.0,
                         help="Motion window in seconds, maximum 15 (default 15)")
+    parser.add_argument("--ground-strong-pivot", action="store_true",
+                        help="Direct-start pivot diagnostic: left 0.20, right zero; maximum 2 seconds")
     parser.add_argument("--ground-right-pivot", action="store_true",
                         help="Reviewed upright diagnostic: turn right with left 0.15, right 0.00; maximum 2 seconds")
     parser.add_argument("--ground-rolling-right", action="store_true",
