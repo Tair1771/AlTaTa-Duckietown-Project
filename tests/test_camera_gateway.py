@@ -51,6 +51,39 @@ class CameraGatewayTests(unittest.TestCase):
         np.testing.assert_array_equal(expected[1], actual[1])
         np.testing.assert_array_equal(expected[2], actual[2])
 
+    def test_preview_skips_excess_decode_without_refreshing_frame_age(self):
+        from unittest.mock import Mock
+        clock = [100.0]
+        self.module.time = NS(monotonic=lambda: clock[0])
+        self.module.rospy.Subscriber = lambda *args, **kwargs: NS()
+        feed = self.module.CameraFeed("duck2")
+        image = np.zeros((480, 640, 3), dtype=np.uint8)
+        feed.bridge = NS(compressed_imgmsg_to_cv2=Mock(return_value=image))
+        message = NS(header=NS(stamp=NS(to_sec=lambda: 100.0)))
+        feed.receive(message)
+        self.assertEqual(feed.bridge.compressed_imgmsg_to_cv2.call_count, 1)
+        for value in [100.02, 100.04, 100.08]:
+            clock[0] = value
+            feed.receive(message)
+        self.assertEqual(feed.bridge.compressed_imgmsg_to_cv2.call_count, 1)
+        self.assertEqual(feed.received_at, 100.0)
+        self.assertAlmostEqual(feed.get("normal")[1], .08)
+        clock[0] = 100.11
+        feed.receive(message)
+        self.assertEqual(feed.bridge.compressed_imgmsg_to_cv2.call_count, 2)
+        self.assertEqual(feed.received_at, 100.11)
+        for view in ("normal", "mask", "overlay"):
+            self.assertTrue(feed.get(view)[0].startswith(b"P6\n"))
+        clock[0] = 100.8
+        self.assertGreater(feed.get("normal")[1], .5)
+
+    def test_preview_fps_setting_is_bounded(self):
+        self.module.rospy.Subscriber = lambda *args, **kwargs: NS()
+        for invalid in [0, 31, float("nan")]:
+            self.module.rospy.get_param = lambda name, default: invalid if name == "~preview_max_fps" else default
+            with self.assertRaisesRegex(ValueError, "preview_max_fps"):
+                self.module.CameraFeed("duck2")
+
     def test_ppm_encoding_and_service_source_have_no_publisher(self):
         image = np.zeros((20, 30, 3), dtype=np.uint8)
         data = self.module.ppm_bytes(image)

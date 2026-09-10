@@ -2,11 +2,15 @@
 
 Use Windows PowerShell in the repository root. Examples use `py -3`; `.cmd`
 shortcuts prefer this laptop's bundled Python, then `py -3`. Install Python
-3.10+ with Tcl/Tk. Use `py -3 -m pip install -r requirements-desktop.txt` for
+3.10+ with Tcl/Tk; enable the Windows Python launcher during installation. Use `py -3 -m pip install -r requirements-desktop.txt` for
 Pillow camera support; install it in the interpreter actually used by the app.
 The main companion and offline apps need no model API key.
 
 ## After switching on laptop and duck2
+
+Use preparation and the companion from the same checkout. For the submitted
+project, open the `AlTaTa - Duckietown Final` folder; a fresh clone works too.
+Close an old companion before opening updated source. Closing requests Stop.
 
 1. Enable the configured hotspot and allow duck2 2–5 minutes to boot.
 2. Run `tools/Start-Duck2-Check.cmd`. SSH identity and login must pass. Exit 3
@@ -14,6 +18,13 @@ The main companion and offline apps need no model API key.
    ownership report. It does not automatically restart services.
 3. Select one mode below. Opening an app/tunnel alone does not restore its
    backend after reboot. Start a physical route only while watching duck2.
+
+The normal `laptop/Start-Duck2Companion.cmd` includes live chat by default;
+special scenario launchers are optional. If the camera says **service reached,
+but no fresh preview**, SSH/HTTP responded but the preview backend has no usable
+frame. Keep the robot stopped and prepare the updated backend. A **connection
+unavailable or timed out** message instead requires checking the robot,
+connection check and SSH tunnel. Neither error calls for changing lane colours.
 
 | Mode | Commands |
 | --- | --- |
@@ -85,3 +96,35 @@ automatically on a table/floor. [USAGE](USAGE.md) documents deliberate restorati
 For local checks: `py -3 -m pip install -r requirements-test.txt`, then
 `py -3 tools/check_project.py --tests`. The ROS transport script requires an
 isolated Noetic container; it is excluded from native unittest discovery.
+
+
+## Choose the correct Python on a new or existing laptop
+
+`py -3 -m pip install -r requirements-desktop.txt` targets standard Windows
+Python. This laptop's `.cmd` shortcuts first look for the bundled interpreter
+below. If it exists, install dependencies into it instead (PowerShell, repo root):
+
+```powershell
+$duck2Python = "$env:USERPROFILE\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+& $duck2Python -m pip install -r requirements-desktop.txt
+& $duck2Python -c "import tkinter; from PIL import Image; print('Desktop dependencies ready')"
+```
+
+On another laptop where that file is absent, the shortcuts use `py -3`.
+Do not install Windows GUI dependencies only into WSL Python. The project can
+remain in WSL storage while Windows Python and Windows OpenSSH run its launchers.
+
+For first-time SSH setup after independently trusting the robot host key:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\tools\setup_duck2_ssh.ps1
+```
+
+This script needs the existing robot account password once to append the public
+key. Enter it privately. The key passphrase unlocks your local key; the hotspot
+password only joins Wi-Fi. Never paste any of them into source or documentation.
+If identity is not yet trusted, the script stops; resolve that before rerunning.
+
+After a disconnect/reconnect, enable the hotspot, unlock the key only if needed,
+run the quick check and prepare the desired backend. Reinstalling keys, rebuilding
+images and repeating full metadata inspection are not routine reboot steps.

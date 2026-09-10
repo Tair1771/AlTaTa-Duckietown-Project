@@ -1,10 +1,10 @@
 # Offline command preview
 
-On Windows, install Python 3 with Tkinter and run `Start-CommandPreview.cmd`, or
+On Windows, install Python 3 with Tkinter and run `py -3 laptop/command_preview_chat.py`, or
 run `python command_preview_chat.py` from this folder. Only standard Python
-libraries are required. The launcher also supports the bundled local Python.
+libraries are required. Use the explicit bundled Python path instead if that is your chosen interpreter.
 
-This is a separate app. `Start-OfflineChat.cmd` still opens the unchanged
+This is a separate app. `py -3 laptop/offline_chat.py` still opens the unchanged
 interpretation-only app. Neither app needs an API key or a robot connection.
 
 Try: **take the next right → actually left → Record preview**. The history

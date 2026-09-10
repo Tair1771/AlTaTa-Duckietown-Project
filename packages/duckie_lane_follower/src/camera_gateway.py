@@ -45,6 +45,11 @@ class LanePreview:
     junction_lane_geometry = LaneFollowerNode.junction_lane_geometry
     detect_lane_bgr = LaneFollowerNode.detect_lane_bgr
 
+    @staticmethod
+    def initial_straight_approach_active():
+        # The preview shares image detection, but has no driving session.
+        return False
+
     def __init__(self):
         self.roi_y0_fraction = float(rospy.get_param("~roi_y0_fraction", 0.50))
         self.roi_y1_fraction = float(rospy.get_param("~roi_y1_fraction", 0.95))
@@ -72,6 +77,10 @@ class LanePreview:
             "yellow", [24, 140, 120], [36, 255, 255])
         self.white_lower, self.white_upper = color_param(
             "white", [0, 0, 170], [180, 55, 255])
+        self.road_white_reference_value = float(rospy.get_param(
+            "~road_white_reference_value", float(self.white_lower[2])))
+        if not self.white_lower[2] <= self.road_white_reference_value <= self.white_upper[2]:
+            raise ValueError("road_white_reference_value must be within white value bounds")
         self._duck_boxes = []
         self._lane_half_width_px = None
         self._lane_half_width_time = None
@@ -85,6 +94,11 @@ class CameraFeed:
     def __init__(self, vehicle):
         self.bridge = CvBridge()
         self.detector = LanePreview()
+        preview_fps = float(rospy.get_param("~preview_max_fps", 10.0))
+        if not math.isfinite(preview_fps) or not 1 <= preview_fps <= 30:
+            raise ValueError("preview_max_fps must be between 1 and 30")
+        self._frame_interval = 1.0 / preview_fps
+        self._last_render_started = None
         self.lock = threading.Lock()
         self.frames = {}
         self.received_at = None
@@ -95,6 +109,14 @@ class CameraFeed:
             CompressedImage, self.receive, queue_size=1, buff_size=2 ** 24)
 
     def receive(self, message):
+        # The app displays at most ten frames/s. Drop excess preview work
+        # before JPEG decoding; do not spend controller time rendering views
+        # nobody can display. Skipped frames never refresh freshness metadata.
+        now = time.monotonic()
+        if (self._last_render_started is not None
+                and now-self._last_render_started < self._frame_interval):
+            return
+        self._last_render_started = now
         try:
             image = self.bridge.compressed_imgmsg_to_cv2(message, desired_encoding="bgr8")
             lane_error, overlay, mask = self.detector.detect_lane_bgr(image)
@@ -149,6 +171,8 @@ def handler_for(feed, token):
                 try:
                     _, age, captured, diagnostic = feed.get("normal")
                     body = json.dumps({"camera_age": age, "captured_at": captured,
+                                       "preview_max_fps": 1.0 / feed._frame_interval,
+                                       "opencv_threads": cv2.getNumThreads(),
                                        "diagnostic": diagnostic}).encode("utf8")
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -183,6 +207,9 @@ def handler_for(feed, token):
 
 
 def main():
+    # Two image processes otherwise each create a four-worker OpenCV pool on
+    # duck2. Single-worker execution reduced measured perception jitter.
+    cv2.setNumThreads(1)
     # Duckietown wraps rospy.Subscriber and requires a DTROS node before a
     # subscriber is constructed.  This node has no publishers.
     node = DTROS(node_name="duck2_read_only_camera_gateway",

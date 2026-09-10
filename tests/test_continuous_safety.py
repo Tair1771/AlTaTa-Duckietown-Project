@@ -9,6 +9,20 @@ from duckie_lane_follower.continuous_safety import SafetyState
 
 
 class ContinuousSafetyTests(unittest.TestCase):
+    def test_slow_initial_registration_is_bounded_and_requires_zero_output(self):
+        state = SafetyState(0.)
+        self.assertIsNone(state.fault(8., []))
+        self.assertIn("ownership", state.fault(15., []))
+        state = SafetyState(0.)
+        state.record_executed(3., .01, 0.)
+        self.assertIn("ownership", state.fault(3., []))
+
+    def test_startup_allowance_cannot_hide_lost_or_competing_owner(self):
+        state = SafetyState(0.)
+        self.assertIsNone(state.fault(3., ["/lane_follower_node"]))
+        self.assertIn("ownership", state.fault(3.1, []))
+        self.assertIn("ownership", SafetyState(0.).fault(3., ["/other"]))
+
     def moving(self):
         state = SafetyState(0.0)
         state.record_status(2.0, {"camera_valid": True})

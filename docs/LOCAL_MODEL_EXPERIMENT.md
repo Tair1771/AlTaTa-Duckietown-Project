@@ -17,9 +17,9 @@ requests, negation, safety-bypass requests and unsupported timing.
 
 Initial instructions passed 6/14 cases. Two refined instruction formats each
 passed 8/14. Failures included core user requirements such as interpreting an
-opposite turn and restoring an earlier speed. The default companion therefore
-continues to use the API-backed interpreter, which still needs live evaluation
-with a user-configured API key.
+opposite turn and restoring an earlier speed. At that historical stage the older connected app retained an API-backed
+interpreter. The current `duck2_companion.py` instead uses `live_chat.py`, a
+local deterministic grammar with no API key, model weights or training step.
 
 The final detailed results are in local-chat-evaluation.json. They are failure
 evidence, not a passing quality certificate. The experimental LocalInterpreter

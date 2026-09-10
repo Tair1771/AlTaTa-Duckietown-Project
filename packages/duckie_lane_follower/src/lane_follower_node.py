@@ -207,6 +207,8 @@ class LaneFollowerNode(DTROS):
             "~junction_straight_approach_max_steering", self.max_steering)
         self.junction_straight_visual_approach = rospy.get_param(
             "~junction_straight_visual_approach", False)
+        self.junction_white_boundary_guard = rospy.get_param(
+            "~junction_white_boundary_guard", False)
         self.junction_straight_lane_target_fraction = self.number_param(
             "~junction_straight_lane_target_fraction", self.lane_target_fraction)
         self.junction_straight_lateral_gain = self.number_param(
@@ -265,6 +267,13 @@ class LaneFollowerNode(DTROS):
         self._junction_encoder_start = None
         self._junction_encoder_adjustment = 0.0
         self._junction_lane_geometry = None
+        self._junction_white_geometry = None
+        self._junction_white_width_reference = None
+        self._junction_white_guard_used = False
+        self._junction_white_guard_reason = None
+        self._junction_exit_geometry = None
+        self._junction_straight_visual_entry = False
+        self._junction_straight_corridor_since = None
         self._junction_approach_geometry = None
         self._junction_approach_geometry_time = None
         self._junction_approach_active = False
@@ -350,14 +359,62 @@ class LaneFollowerNode(DTROS):
         self.validate_settings()
         self.yellow_lower, self.yellow_upper = self.color_range("yellow", [24, 140, 120], [36, 255, 255])
         self.white_lower, self.white_upper = self.color_range("white", [0, 0, 170], [180, 55, 255])
+        # Keep the ordinary-road centroid calibrated to the accepted bright
+        # border, independently of the lower threshold needed at dim corners.
+        self.road_white_reference_value = self.number_param(
+            "~road_white_reference_value", float(self.white_lower[2]))
+        if not self.white_lower[2] <= self.road_white_reference_value <= self.white_upper[2]:
+            raise ValueError("road_white_reference_value must be within white value bounds")
+        self._road_white_reference_used = False
+        self.road_heading_guard = rospy.get_param("~road_heading_guard", False)
+        self.road_left_lookahead = rospy.get_param("~road_left_lookahead", False)
+        if type(self.road_left_lookahead) is not bool:
+            raise ValueError("Road left lookahead must be boolean")
+        self.road_left_curve_boost = rospy.get_param("~road_left_curve_boost", False)
+        if type(self.road_left_curve_boost) is not bool:
+            raise ValueError("Road left curve boost must be boolean")
+        self._junction_forward_geometry = None
+        self._junction_forward_since = None
+        self._junction_forward_last_seen = None
+        self._junction_forward_used = False
+        self._road_left_shape = None
+        self._road_left_boost_since = None
+        self._road_left_boost_active = False
+        self._road_left_boost_last_seen = None
+        self._road_left_boost_white_trace = None
+        self._road_left_boost_gap_active = False
+        self._road_curve_geometry = None
+        self._road_left_lookahead_used = False
+        self._left_curve_since = None
+        self._left_curve_confirmed_at = None
+        self._left_curve_steering = None
+        self._left_curve_white_x = None
+        self._road_left_gap_active = False
+        self.junction_left_visual_latch = rospy.get_param("~junction_left_visual_latch", False)
+        if type(self.road_heading_guard) is not bool or type(self.junction_left_visual_latch) is not bool:
+            raise ValueError("Road heading guard and left visual latch must be boolean")
+        self._road_heading_guard_used = False
+        self._junction_left_visual_entry = False
+        self._junction_left_corridor_since = None
+        self._junction_left_near_since = None
+        self._junction_left_red_rearmed = False
+        self._junction_stop_white_seen = False
         self.red_low_lower, self.red_low_upper = self.color_range("red_low", [0, 110, 90], [10, 255, 255])
         self.red_high_lower, self.red_high_upper = self.color_range("red_high", [170, 110, 90], [180, 255, 255])
         self._lane_diagnostic = "No valid image yet"
         self._camera_error = "Waiting for camera"
         self._stop_reason = "Waiting for camera"
         self._last_camera_stamp = None
+        self._camera_processing_started_at = None
+        self._last_camera_received_at = None
+        self._camera_processing_seconds = None
+        self._last_camera_timeout = None
         self._camera_valid = False
         self._camera_lock = threading.Lock()
+        self._executed_wheels = None
+        self._executed_wheels_time = None
+        self._executed_samples = 0
+        self._executed_zero_samples = 0
         self.status_publisher = rospy.Publisher(
             f"/{self.vehicle_name}/lane_follower/status", String, queue_size=1, latch=True
         )
@@ -392,6 +449,10 @@ class LaneFollowerNode(DTROS):
             f"/{self.vehicle_name}/right_wheel_encoder_node/tick",
             WheelEncoderStamped, self.right_encoder_callback, queue_size=10,
         )
+        self.executed_wheels_subscriber = rospy.Subscriber(
+            f"/{self.vehicle_name}/wheels_driver_node/wheels_cmd_executed",
+            WheelsCmdStamped, self.executed_wheels_callback, queue_size=20,
+        )
         self._camera_watchdog = rospy.Timer(
             rospy.Duration(0.1), self.check_camera_timeout
         )
@@ -421,7 +482,7 @@ class LaneFollowerNode(DTROS):
                      "smooth_steering_deadband", "temporal_lane_width_fallback",
                      "boundary_risk_stop", "taper_inner_wheel_floor",
                      "sharp_corner_enabled", "junction_straight_encoder_balance",
-                     "junction_straight_visual_approach"):
+                     "junction_straight_visual_approach", "junction_white_boundary_guard"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError("~%s must be a boolean" % name)
         if not 0 < self.base_speed <= self.max_speed <= 1 or self.lost_speed != 0:
@@ -538,6 +599,20 @@ class LaneFollowerNode(DTROS):
             raise ValueError("Expected a nonempty BGR uint8 image at least 20 by 20 pixels")
 
     def reset_steering(self):
+        self._junction_white_guard_used = False
+        self._junction_white_guard_reason = None
+        self._junction_white_width_reference = None
+        self._junction_forward_since = None
+        self._junction_forward_last_seen = None
+        self._junction_forward_used = False
+        self._road_left_boost_since = None
+        self._road_left_boost_active = False
+        self._road_left_boost_last_seen = None
+        self._road_left_boost_white_trace = None
+        self._road_left_boost_gap_active = False
+        self._left_curve_since = self._left_curve_confirmed_at = None
+        self._left_curve_steering = None
+        self._road_left_gap_active = False
         self._right_alignment_reference = None
         self._right_alignment_adjustment = 0.0
         self.filtered_error = self.prev_steering = 0.0
@@ -545,6 +620,20 @@ class LaneFollowerNode(DTROS):
 
     def left_encoder_callback(self, msg):
         self._encoder_callback("left", msg)
+
+    def executed_wheels_callback(self, msg):
+        """Read-only driver evidence; these values never command the motors."""
+        try:
+            values = (float(msg.vel_left), float(msg.vel_right))
+            if not all(math.isfinite(v) for v in values):
+                return
+        except (AttributeError, TypeError, ValueError):
+            return
+        with self._wheel_lock:
+            self._executed_wheels = values
+            self._executed_wheels_time = time.monotonic()
+            self._executed_samples += 1
+            self._executed_zero_samples += int(values == (0.0, 0.0))
 
     def right_encoder_callback(self, msg):
         self._encoder_callback("right", msg)
@@ -568,6 +657,11 @@ class LaneFollowerNode(DTROS):
         except (KeyError, TypeError, ValueError):
             return None
 
+    def initial_straight_approach_active(self):
+        """Explicitly confirmed straight start, only before the first junction."""
+        return (self.live.enabled and self.live.active and self.live.center_initial_straight
+                and self.route_index == 1 and self.navigation_state == "following")
+
     def straight_approach_wheels(self, left, right, steering):
         """Use row-matched lane geometry throughout an authorized approach."""
         if (not self.junctions_calibrated
@@ -577,11 +671,13 @@ class LaneFollowerNode(DTROS):
         # Ordinary lane following owns roads and curves between junctions.
         # Once a transverse red line becomes visible, latch the dedicated
         # approach controller so brief red-detector flicker cannot switch it.
+        initial_straight = self.initial_straight_approach_active()
         if not self._junction_approach_active:
-            if not self._red_line_visible:
+            if not self._red_line_visible and not initial_straight:
                 return left, right, steering
             self._junction_approach_active = True
-            self._junction_approach_steering = steering
+            # Do not seed a confirmed straight with centroid/trim steering.
+            self._junction_approach_steering = 0.0 if initial_straight else steering
             self._junction_approach_control_time = time.monotonic()
         geometry = self._junction_lane_geometry
         if not self.junction_geometry_steering_valid(geometry):
@@ -596,9 +692,14 @@ class LaneFollowerNode(DTROS):
             desired = self.straight_visual_steering(
                 geometry, self.junction_straight_approach_max_steering)
         now = time.monotonic()
-        change = self.max_steering_change * min(
-            max(now - self._junction_approach_control_time, 0.001), 0.1) * 30.0
+        dt = min(max(now - self._junction_approach_control_time, 0.001), 0.1)
+        change = self.max_steering_change * dt * 30.0
         self._junction_approach_control_time = now
+        if initial_straight:
+            # Smooth row-fit jitter with the existing frame-rate-aware filter;
+            # keep the same gains, steering cap, lane target and mean speed.
+            weight = 1.0 - (1.0 - self.alpha) ** (dt * 30.0)
+            desired = self._junction_approach_steering + weight * (desired - self._junction_approach_steering)
         limited = float(np.clip(
             desired,
             self._junction_approach_steering - change,
@@ -638,6 +739,115 @@ class LaneFollowerNode(DTROS):
             self.max_steering if limit is None else limit,
         ))
 
+    def straight_forward_geometry(self, image):
+        """Observe the distant straight exit above the normal road ROI.
+
+        Only supports bounded aiming during an authorized straight crossing.
+        It never counts as near-lane reacquisition or advances route progress.
+        """
+        h, w = image.shape[:2]
+        start, end = int(.29*h), int(min(.50, self.roi_y0_fraction)*h)
+        result = dict(usable=False, source="distant_straight_exit", pairs=[])
+        if end-start < 20:
+            return result
+        hsv = cv2.cvtColor(image[start:end], cv2.COLOR_BGR2HSV)
+        yellow = cv2.inRange(hsv, self.yellow_lower, self.yellow_upper)
+        white = cv2.inRange(hsv, self.white_lower, self.white_upper)
+        pairs = []
+        for row in range(2, end-start-2, 3):
+            def runs(mask, max_width):
+                columns = np.flatnonzero(np.count_nonzero(mask[row-1:row+2], axis=0) >= 2)
+                return [(float(group.mean()), len(group)) for group in
+                        np.split(columns, np.where(np.diff(columns)>1)[0]+1)
+                        if 2 <= len(group) <= max_width*w]
+            choices = []
+            for yx, _ in runs(yellow, .05):
+                for wx, _ in runs(white, .08):
+                    center = (yx+wx)/2
+                    if (yx < self.yellow_right_cutoff*w and wx >= self.white_left_cutoff*w
+                            and .08*w <= wx-yx <= .55*w and .25*w <= center <= .75*w):
+                        choices.append((yx, wx, center))
+            if not choices:
+                continue
+            reference = pairs[-1]["center_x"] if pairs else .5*w
+            yx, wx, center = min(choices, key=lambda v: abs(v[2]-reference))
+            if pairs and (abs(center-reference) > .035*w
+                          or start+row-pairs[-1]["row"] > .035*h
+                          or wx-yx < pairs[-1]["width"]-.04*w):
+                continue
+            pairs.append(dict(row=start+row, yellow_x=yx, white_x=wx,
+                              center_x=center, width=wx-yx))
+        result["pairs"] = pairs
+        if len(pairs) < 6 or pairs[-1]["row"]-pairs[0]["row"] < .04*h:
+            return result
+        # A corner fragment at the far end can spoil an otherwise consistent
+        # outgoing corridor. Only discard a small prefix; never search arbitrary
+        # subsets, widen the ROI, or relax ordering, span and fit requirements.
+        for trimmed in range(min(2, len(pairs)//5) + 1):
+            corridor = pairs[trimmed:]
+            if len(corridor) < 6 or corridor[-1]["row"]-corridor[0]["row"] < .04*h:
+                continue
+            rows = np.array([p["row"] for p in corridor], dtype=float)
+            fits = {}
+            for key in ("yellow_x", "white_x", "center_x"):
+                values = np.array([p[key] for p in corridor], dtype=float)
+                fits[key] = np.polyfit(rows, values, 1)
+                if np.max(np.abs(values-np.polyval(fits[key], rows))) > .015*w:
+                    break
+            else:
+                # Discarded rows must actually disagree with the retained fit.
+                # This prevents trimming merely to satisfy the opening gate.
+                if trimmed and not any(
+                        abs(p[key]-np.polyval(fits[key], p["row"])) > .015*w
+                        for p in pairs[:trimmed] for key in fits):
+                    continue
+                # A longitudinal corridor opens toward the camera; reject
+                # parallel transverse fragments and implausible narrowing.
+                if corridor[-1]["width"] < corridor[0]["width"]+.02*w:
+                    continue
+                result.update(
+                    usable=True, pairs=corridor, trimmed_far_pairs=trimmed,
+                    center_x=float(np.median([p["center_x"] for p in corridor])),
+                    image_width=w)
+                break
+        return result
+
+    def straight_forward_wheels(self, speed):
+        """Low-authority aiming; ordinary lane steering takes priority later."""
+        now = time.monotonic()
+        g = self._junction_forward_geometry or {}
+        eligible = (self._active_turn == "straight"
+                    and self.navigation_state in ("crossing", "reacquiring")
+                    and (self.require_client_heartbeat or self.live.enabled)
+                    and g.get("usable", False) and self._camera_valid
+                    and 0 <= now-self._last_frame_time <= self._camera_timeout)
+        self._junction_forward_used = False
+        if not eligible:
+            self._junction_forward_since = self._junction_forward_last_seen = None
+            return None
+        # Confirmation duration is not a minimum camera frame rate. A fresh
+        # 0.25/0.30-second callback cadence must not repeatedly erase an already
+        # observed corridor. Missing/invalid geometry still clears it above.
+        if (self._junction_forward_since is None or self._junction_forward_last_seen is None
+                or not 0 <= now-self._junction_forward_last_seen <= self._camera_timeout):
+            self._junction_forward_since = now
+        self._junction_forward_last_seen = now
+        if now-self._junction_forward_since < .2-1e-9:
+            return None
+        # Aim at the optical centre, without importing the near-road lateral
+        # target/trim into this distant bearing. Six-pixel-scale deadband avoids
+        # steering on tiny dash-edge shifts in an already aligned exit.
+        error = (g["center_x"]-.5*g["image_width"])/(.5*g["image_width"])
+        excess = math.copysign(max(0.0, abs(error)-.02), error)
+        steering = float(np.clip(.25*excess, -.025, .025))
+        if self.flip_steering:
+            steering = -steering
+        self._junction_forward_used = True
+        self._junction_encoder_start = None
+        self._junction_encoder_adjustment = 0.0
+        return (float(np.clip(speed-steering, self.min_active_wheel_speed, self.max_speed)),
+                float(np.clip(speed+steering, self.min_active_wheel_speed, self.max_speed)), steering)
+
     def straight_visual_wheels(self, speed):
         """Steer from a usable multi-row corridor without global trim.
 
@@ -648,7 +858,9 @@ class LaneFollowerNode(DTROS):
         """
         geometry = self._junction_lane_geometry
         if not self.junction_geometry_steering_valid(geometry):
-            return None
+            return self.straight_forward_wheels(speed)
+        self._junction_forward_used = False
+        self._junction_forward_since = self._junction_forward_last_seen = None
         steering = self.straight_visual_steering(geometry)
         left = float(np.clip(speed - steering, 0.0, self.max_speed))
         right = float(np.clip(speed + steering, 0.0, self.max_speed))
@@ -657,6 +869,127 @@ class LaneFollowerNode(DTROS):
         self._junction_encoder_start = None
         self._junction_encoder_adjustment = 0.0
         return left, right, steering
+
+    @staticmethod
+    def right_white_boundary_geometry(mask, image_width):
+        """Trace a nearby longitudinal white stripe independently of yellow.
+
+        Its perspective slope is not a measured heading. This observation can
+        keep an encroaching right edge out of the forward path, never confirm
+        an outgoing lane or select a junction turn.
+        """
+        height = mask.shape[0]
+        pairs = []
+        for fraction in (.90, .78, .66, .54, .42, .30, .18):
+            row = int(round(fraction*(height-1)))
+            columns = np.flatnonzero(np.count_nonzero(mask[max(0,row-2):row+3], axis=0) >= 2)
+            runs = [(float(group.mean()), len(group)) for group in
+                    np.split(columns, np.where(np.diff(columns)>1)[0]+1)
+                    if 5 <= len(group) <= .14*image_width]
+            if not pairs:
+                runs = [r for r in runs if r[0] >= .35*image_width]
+                if fraction < .78 or not runs:
+                    continue
+                value = max(runs, key=lambda r: r[1])[0]
+            else:
+                if not runs or pairs[-1]["row_fraction"]-fraction > .24+1e-9:
+                    continue
+                expected = pairs[-1]["white_x"]
+                if len(pairs) > 1:
+                    previous, last = pairs[-2:]
+                    expected += ((fraction-last["row_fraction"])*
+                                 (last["white_x"]-previous["white_x"])/
+                                 (last["row_fraction"]-previous["row_fraction"]))
+                value = min(runs, key=lambda r: abs(r[0]-expected))[0]
+                if abs(value-expected) > .12*image_width:
+                    continue
+            pairs.append(dict(row_fraction=fraction, white_x=value))
+        pairs.reverse()
+        result = dict(usable=False, image_width=image_width, pairs=pairs)
+        if len(pairs) < 5:
+            return result
+        rows = np.array([p["row_fraction"] for p in pairs])
+        values = np.array([p["white_x"] for p in pairs])
+        if rows[-1] < .78 or rows[-1]-rows[0] < .48-1e-9:
+            return result
+        fit = np.polyfit(rows, values, 1)
+        if (np.max(np.abs(values-np.polyval(fit, rows))) > .025*image_width
+                or not -.02*image_width <= values[-1]-values[0] <= .65*image_width):
+            return result
+        result.update(usable=True, near_x_fraction=float(np.median(values[-2:])/image_width))
+        return result
+
+    def junction_white_guard_wheels(self, left, right, steering):
+        """One-sided boundary protection added after existing junction control.
+
+        Preserve zero, intentional turns and ordinary road following. Only a
+        currently observed longitudinal right stripe can request a bounded
+        left correction; absence never adds motion or advances the route.
+        """
+        self._junction_white_guard_used = False
+        self._junction_white_guard_reason = None
+        now = time.monotonic()
+        approach = (self.navigation_state == "following" and self._junction_approach_active
+                    and self._active_turn is None)
+        crossing = (self.navigation_state in ("crossing", "reacquiring")
+                    and self._active_turn == "straight")
+        g = self._junction_white_geometry or {}
+        if not (self.junction_white_boundary_guard and self.junctions_calibrated
+                and self.junction_straight_visual_approach and (approach or crossing)
+                and self._sharp_corner_state in ("idle", "cooldown")
+                and self._camera_valid and 0 <= now-self._last_frame_time <= self._camera_timeout
+                and self.drive_enabled and not self.manual_stop and not self.red_stop_latched
+                and (not self.live.enabled or (self.live.active and self.live.paused_at is None))
+                and min(left, right) > 0 and g.get("usable", False)):
+            return left, right, steering
+        paired = self._junction_lane_geometry or {}
+        if (paired.get("valid") and paired.get("near_support")
+                and abs(paired["lateral_error"]) <= self.junction_straight_settle_max_lateral
+                and abs(paired["heading_error"]) <= self.junction_straight_settle_max_heading):
+            # A complete, aligned corridor is stronger evidence than the
+            # conservative white-only envelope, especially on a narrow view.
+            return left, right, steering
+        width = g["image_width"]
+        # A nearby right edge inside the forward corridor deserves a small
+        # left correction even when no paired lane-width estimate survives.
+        near = [p["white_x"] for p in g["pairs"] if p["row_fraction"] >= .66]
+        if not near:
+            return left, right, steering
+        intrusion = max(0.0, .70-float(np.median(near))/width)
+        reason = "near right white boundary enters forward corridor"
+        reference = self._junction_white_width_reference
+        if (reference and reference["image_width"] == width
+                and 0 <= now-reference["time"] <= .8):
+            prior = reference["pairs"]
+            rows = [p["row_fraction"] for p in prior]
+            widths = [p["white_x"]-p["yellow_x"] for p in prior]
+            # Compare only actually supported depths. Never extrapolate a far
+            # fragment down to the robot or use a mixed-depth centroid width.
+            offsets = [(self.junction_straight_lane_target_fraction*width
+                        + .5*float(np.interp(p["row_fraction"], rows, widths))-p["white_x"])/width
+                       for p in g["pairs"] if p["row_fraction"] >= .66
+                       and rows[0] <= p["row_fraction"] <= rows[-1]]
+            if offsets:
+                relative = max(0.0, float(np.median(offsets))-.025)
+                if relative > intrusion:
+                    intrusion = relative
+                    reason = "right white boundary intrudes into recent paired corridor"
+        if intrusion <= 0:
+            return left, right, steering
+        correction = min(.03, self.junction_straight_approach_max_steering,
+                         self.max_steering, 2*self.junction_straight_lateral_gain*intrusion)
+        # Work in wheel space: positive always means the right wheel faster.
+        # Do not add a trim to an already adequate or stronger left correction.
+        current = (right-left)/2.0
+        centre = (left+right)/2.0
+        correction = min(correction, centre-self.min_active_wheel_speed, self.max_speed-centre)
+        if correction <= max(current, 0.0):
+            return left, right, steering
+        self._junction_white_guard_used = True
+        self._junction_white_guard_reason = reason
+        self._junction_encoder_start = None
+        self._junction_encoder_adjustment = 0.0
+        return centre-correction, centre+correction, correction
 
     @staticmethod
     def junction_geometry_steering_valid(geometry):
@@ -740,12 +1073,13 @@ class LaneFollowerNode(DTROS):
             left = max(min(left, self.min_active_wheel_speed), left - amount)
         return left, right
 
-    def junction_lane_geometry(self, yellow_mask, white_mask, image_width):
+    def junction_lane_geometry(self, yellow_mask, white_mask, image_width,
+                               row_fractions=(0.18, 0.36, 0.54, 0.72, 0.88)):
         """Fit a lane corridor from yellow/white samples at shared image rows."""
         height = yellow_mask.shape[0]
         pairs = []
         half_band = max(3, int(round(height * 0.025)))
-        for fraction in (0.18, 0.36, 0.54, 0.72, 0.88):
+        for fraction in row_fractions:
             row = int(round(fraction * (height - 1)))
             start, end = max(0, row - half_band), min(height, row + half_band + 1)
             yellow_x = np.where(yellow_mask[start:end] > 0)[1]
@@ -802,6 +1136,271 @@ class LaneFollowerNode(DTROS):
         })
         return result
 
+    def straight_exit_geometry(self, yellow_mask, white_mask, width, original):
+        """Find real near-lane support between the five fixed sampling bands.
+
+        Only app-controlled straight-junction exits use this fallback. Sampling
+        a dash gap or a shadow at row .72 must not hide an otherwise continuous
+        corridor reaching the middle/lower ROI. Retain observed road-entry
+        evidence separately from full near support; never extrapolate a distant
+        pair toward us. A stable road corridor commits the app handoff once.
+        Ordinary lane centroids, masks and left/right junctions are unchanged.
+        """
+        if original.get("valid"):
+            return original
+        dense = self.junction_lane_geometry(
+            yellow_mask, white_mask, width,
+            row_fractions=tuple(i / 100.0 for i in range(6, 95, 4)))
+        pairs = dense.get("pairs", [])
+        # Keep genuinely observed mid/near road evidence even when the next
+        # fixed band falls in a yellow dash gap. Previously this was discarded
+        # unless the stricter near-field fit passed, delaying road ownership.
+        supported = bool(
+            dense.get("steering_valid") and len(pairs) >= 6
+            and dense.get("row_span", 0.0) >= 0.36 - 1e-9
+            and pairs[-1]["row_fraction"] >= .54
+            and all(b["width"] >= a["width"] - .12 * width
+                    and abs(b["center_x"] - a["center_x"]) <= .12 * width
+                    for a, b in zip(pairs, pairs[1:])))
+        if not supported:
+            return original
+        near = (dense.get("row_span", 0.0) >= .54 - 1e-9
+                and pairs[-1]["row_fraction"] >= 2.0 / 3.0)
+        dense.update(valid=near, near_support=near, sampling="dense_straight_exit")
+        return dense
+
+    def road_forward_geometry(self, image):
+        """Trace genuine stripe runs from the near road into the curve entry.
+
+        A whole-row white median can select walls beyond the road. Continue a
+        nearby border instead, limiting jumps and rejecting broad fragments.
+        No stripe is extrapolated into a reported boundary pair.
+        """
+        h, w = image.shape[:2]
+        start = int(.4*h)
+        hsv = cv2.cvtColor(image[start:int(.9*h)], cv2.COLOR_BGR2HSV)
+        lower = self.white_lower.copy()
+        lower[2] = self.road_white_reference_value
+        white = cv2.inRange(hsv, lower, self.white_upper)
+        yellow = cv2.inRange(hsv, self.yellow_lower, self.yellow_upper)
+        wh, yh, pairs = [], [], []
+        for fraction in (.85, .80, .75, .70, .65, .60, .55, .50, .45, .40):
+            row = int(fraction*h)-start
+            def runs(mask):
+                band = mask[max(0,row-3):row+4]
+                columns = np.flatnonzero(np.count_nonzero(band, axis=0) >= 3)
+                return [float(np.mean(group)) for group in
+                        np.split(columns, np.where(np.diff(columns)>1)[0]+1)
+                        if 4 <= len(group) <= .18*w]
+            def prediction(history, default):
+                if not history:
+                    return default
+                value = history[-1][1]
+                if len(history) > 1:
+                    value += ((fraction-history[-1][0]) *
+                              (history[-1][1]-history[-2][1]) /
+                              (history[-1][0]-history[-2][0]))
+                return value
+            candidates = [x for x in runs(white) if x >= self.white_left_cutoff*w]
+            if not candidates or (not wh and fraction < .65):
+                continue
+            expected = prediction(wh, .9*w)
+            wx = min(candidates, key=lambda x: abs(x-expected))
+            if wh and (abs(wx-expected) > .15*w or wh[-1][0]-fraction > .15+1e-9):
+                continue
+            wh.append((fraction,wx))
+            candidates = [x for x in runs(yellow) if x < self.yellow_right_cutoff*w
+                          and .15*w <= wx-x <= .95*w]
+            if not candidates:
+                continue
+            expected = prediction(yh, .2*w)
+            yx = min(candidates, key=lambda x: abs(x-expected))
+            if yh and abs(yx-expected) > .2*w:
+                continue
+            yh.append((fraction,yx))
+            pairs.append(dict(row_fraction=round((fraction-.4)/.5, 3),
+                              yellow_x=yx, white_x=wx, center_x=(yx+wx)/2,
+                              width=wx-yx))
+        pairs.reverse()
+        return dict(image_width=w, pairs=pairs, source="tracked_forward_borders")
+
+    def detect_left_road_curve(self, image):
+        """Recognize curvature, rather than mistaking a lateral error for a bend.
+
+        Trace observed yellow/white pairs at matched depths. A slanted straight
+        has linear borders; require leftward bow in BOTH borders, spread over
+        the near and far road. This is image geometry, not a metric radius.
+        """
+        h, w = image.shape[:2]
+        start = int(.4*h)
+        hsv = cv2.cvtColor(image[start:int(.9*h)], cv2.COLOR_BGR2HSV)
+        lower = self.white_lower.copy()
+        lower[2] = self.road_white_reference_value
+        white = cv2.inRange(hsv, lower, self.white_upper)
+        yellow = cv2.inRange(hsv, self.yellow_lower, self.yellow_upper)
+        white = cv2.morphologyEx(white, cv2.MORPH_CLOSE, np.ones((1, 7), np.uint8))
+        wh, yh, pairs = [], [], []
+        for fraction in np.linspace(.85, .4, 19):
+            row = int(fraction*h)-start
+            def runs(mask):
+                band = mask[max(0, row-3):row+4]
+                columns = np.flatnonzero(np.count_nonzero(band, axis=0) >= 3)
+                return [(float(np.mean(group)), len(group)) for group in
+                        np.split(columns, np.where(np.diff(columns)>1)[0]+1)
+                        if 5 <= len(group) <= .25*w]
+            def predict(history):
+                value = history[-1][1]
+                if len(history) > 1:
+                    value += ((fraction-history[-1][0]) *
+                              (history[-1][1]-history[-2][1]) /
+                              (history[-1][0]-history[-2][0]))
+                return value
+            candidates = [run for run in runs(white)
+                          if wh or run[0] >= self.white_left_cutoff*w]
+            if not candidates or (not wh and fraction < .65):
+                continue
+            # Tiny glints next to a broad near stripe must not seed the trace.
+            wx = (min(candidates, key=lambda run: abs(run[0]-predict(wh)))[0]
+                  if wh else max(candidates, key=lambda run: run[1])[0])
+            if wh and (abs(wx-predict(wh)) > .12*w or wh[-1][0]-fraction > .1+1e-9):
+                continue
+            wh.append((fraction, wx))
+            candidates = [run for run in runs(yellow)
+                          if run[0] < self.yellow_right_cutoff*w
+                          and .15*w <= wx-run[0] <= .95*w]
+            if not candidates:
+                continue
+            yx = min(candidates, key=lambda run: abs(run[0]-(predict(yh) if yh else .2*w)))[0]
+            if yh and abs(yx-predict(yh)) > .15*w:
+                continue
+            yh.append((fraction, yx))
+            pairs.append(dict(row_fraction=round((fraction-.4)/.5, 3),
+                              yellow_x=yx, white_x=wx, center_x=(yx+wx)/2))
+        pairs.reverse()
+        result = dict(candidate=False, reason="insufficient shared depths", pairs=pairs,
+                      image_width=w)
+        # Independent observed white shape supports a SHORT yellow-dash gap
+        # only after both boundaries have already confirmed this same curve.
+        # It is never enough to recognize a new left turn by itself.
+        trace = [dict(row_fraction=round((f-.4)/.5, 3), white_x=x)
+                 for f, x in reversed(wh)]
+        result["white_trace"] = trace
+        if len(pairs) < 6:
+            return result
+        y = np.array([p["row_fraction"] for p in pairs])
+        span = float(np.ptp(y))
+        if span < .5 or y[0] > .35 or y[-1] < .7:
+            return result
+        metrics = {}
+        for key in ("yellow_x", "white_x", "center_x"):
+            x = np.array([p[key] for p in pairs])
+            fit = np.polyfit(y, x, 2)
+            metrics[key] = dict(bow=float(-fit[0]*span**2/(4*w)),
+                                residual=float(np.max(np.abs(np.polyval(fit, y)-x))/w),
+                                forward_left=float((x[-1]-x[0])/w))
+        result.update(metrics=metrics, span=span, reason="borders do not confirm left curve")
+        # Compare the robot's image centre with the corridor at SHARED near
+        # depths. A centroid mixes near white with far yellow and can demand
+        # a right turn even while both traced borders still bend left.
+        near = [(p["center_x"]-.5*w)/(p["white_x"]-p["yellow_x"])
+                for p in pairs if p["row_fraction"] >= .7
+                and p["white_x"] > p["yellow_x"]]
+        result["near_lateral_fraction"] = float(np.median(near)) if len(near) >= 2 else None
+        yellow, white, center = (metrics[k] for k in ("yellow_x", "white_x", "center_x"))
+        result["candidate"] = (yellow["bow"] >= .015 and white["bow"] >= .008
+                               and yellow["residual"] <= .025 and white["residual"] <= .025
+                               and center["forward_left"] >= .10)
+        if result["candidate"]:
+            result["reason"] = "both borders curve left"
+        return result
+
+    def left_road_yellow_gap_allowed(self, now):
+        """Continue only recently confirmed curvature with a coherent white edge.
+
+        The 0.8-second absolute limit is measured from the last complete curve
+        observation. White-only frames cannot renew it. Stop/pause/fault resets
+        the reference; straight white, a jumping edge and absent images fail.
+        """
+        shape = self._road_left_shape or {}
+        last = getattr(self, "_road_left_boost_last_seen", None)
+        if not (getattr(self, "road_left_curve_boost", False)
+                and last is not None and 0 <= now-last <= .8
+                and self.navigation_state == "following" and self._active_turn is None
+                and self._junction_phase in ("idle", "complete", "route_complete")
+                and not self._junction_approach_active and not self._red_line_visible
+                and self._sharp_corner_state in ("idle", "cooldown")
+                and self._white_boundary_visible and not self._yellow_boundary_visible
+                and not self.manual_stop and not self.red_stop_latched
+                and self.drive_enabled and self._camera_valid
+                and 0 <= now-self._last_frame_time <= self._camera_timeout
+                and (not self.live.enabled or (self.live.active and self.live.paused_at is None))):
+            return False
+        previous = self._road_left_boost_white_trace or []
+        current = shape.get("white_trace", [])
+        matches = [(p, q) for p in current for q in previous
+                   if abs(p["row_fraction"]-q["row_fraction"]) < .001]
+        # Compare observations at identical depths, never a centroid at another
+        # image height. Large changes may be another edge or a relocated robot.
+        width = shape.get("image_width", 0)
+        if not (width > 0 and len(matches) >= 6
+                and all(abs(p["white_x"]-q["white_x"]) <= .12*width
+                        for p, q in matches)):
+            return False
+        rows = np.array([p["row_fraction"] for p, _ in matches])
+        values = np.array([p["white_x"] for p, _ in matches])
+        # Retain the recent per-row width through this short gap, not the
+        # mixed-depth centroid width. A large move left of the corridor still
+        # releases the left turn; white-only observations never renew memory.
+        near = [(q["center_x"]+p["white_x"]-q["white_x"]-.5*width)
+                / (q["white_x"]-q["yellow_x"])
+                for p, q in matches if p["row_fraction"] >= .7
+                and q["white_x"] > q["yellow_x"]]
+        if len(near) < 2 or float(np.median(near)) > .10:
+            return False
+        span = float(np.ptp(rows))
+        if span < .5 or rows[0] > .35 or rows[-1] < .7:
+            return False
+        # Judge curvature over the SAME depths that the complete corridor
+        # supported, not newly visible far pixels with different perspective.
+        fit = np.polyfit(rows, values, 2)
+        return bool(-fit[0]*span**2/(4*width) >= .008
+                    and np.max(np.abs(np.polyval(fit, rows)-values))/width <= .025
+                    and (values[-1]-values[0])/width >= .10)
+
+    def left_road_curve_boost_active(self, lane_error, now):
+        """Only a fresh, sustained road-curve observation authorizes .03/.20."""
+        evidence = self._road_left_shape or {}
+        gap = self.left_road_yellow_gap_allowed(now)
+        near = evidence.get("near_lateral_fraction")
+        paired_curve = (evidence.get("candidate", False) and self._lane_both_visible
+                        and near is not None and math.isfinite(near) and near <= .10)
+        eligible = (self.road_left_curve_boost
+                    and (paired_curve or gap)
+                    and self.navigation_state == "following" and self._active_turn is None
+                    and self._junction_phase in ("idle", "complete", "route_complete")
+                    and not self._junction_approach_active and not self._red_line_visible
+                    and self._sharp_corner_state in ("idle", "cooldown")
+                    and self._camera_valid
+                    and 0 <= now-self._last_frame_time <= self._camera_timeout
+                    and not self.manual_stop and not self.red_stop_latched
+                    and self.drive_enabled and self.speed_scale > 0
+                    and (not self.live.enabled or (self.live.active and self.live.paused_at is None))
+                    and lane_error is not None and math.isfinite(lane_error))
+        if not eligible:
+            self._road_left_boost_since = None
+            self._road_left_boost_active = False
+            self._road_left_boost_last_seen = None
+            self._road_left_boost_white_trace = None
+        else:
+            if self._road_left_boost_since is None:
+                self._road_left_boost_since = now
+            self._road_left_boost_active = now-self._road_left_boost_since >= .3
+            if self._road_left_boost_active and not gap:
+                self._road_left_boost_last_seen = now
+                self._road_left_boost_white_trace = evidence.get("pairs")
+        self._road_left_boost_gap_active = bool(gap and self._road_left_boost_active)
+        return self._road_left_boost_active
+
     def detect_lane_bgr(self, img_bgr):
         """
         Detect the right-lane center from a real Duckiebot BGR camera image.
@@ -850,6 +1449,31 @@ class LaneFollowerNode(DTROS):
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
         self._junction_lane_geometry = self.junction_lane_geometry(
             yellow_mask, white_mask, w)
+        if self.initial_straight_approach_active():
+            # Find existing dashes between fixed bands without inventing
+            # unseen near borders. This fallback is confined to the start leg.
+            self._junction_lane_geometry = self.straight_exit_geometry(
+                yellow_mask, white_mask, w, self._junction_lane_geometry)
+        self._junction_white_geometry = None
+        if getattr(self, "junction_white_boundary_guard", False):
+            self._junction_white_geometry = self.right_white_boundary_geometry(white_mask, w)
+            geometry = self._junction_lane_geometry
+            if geometry.get("valid"):
+                pairs = geometry["pairs"]
+                widths = [p["white_x"]-p["yellow_x"] for p in pairs]
+                if all(b >= a-.04*w for a, b in zip(widths, widths[1:])):
+                    self._junction_white_width_reference = dict(
+                        time=time.monotonic(), image_width=w, pairs=copy.deepcopy(pairs))
+        # Extra samples confirm the exit only. They must never switch the
+        # calibrated visual steering between differently fitted image depths.
+        self._junction_exit_geometry = None
+        self._junction_forward_geometry = None
+        if (getattr(self, "navigation_state", None) in ("crossing", "reacquiring")
+                and self._active_turn == "straight"
+                and (self.require_client_heartbeat or self.live.enabled)):
+            self._junction_exit_geometry = self.straight_exit_geometry(
+                yellow_mask, white_mask, w, self._junction_lane_geometry)
+            self._junction_forward_geometry = self.straight_forward_geometry(img_bgr)
 
         def weighted_center_x(mask, min_pixels):
             ys, xs = np.where(mask > 0)
@@ -867,6 +1491,52 @@ class LaneFollowerNode(DTROS):
         self._lane_both_visible = False
         yellow_x, yellow_y = weighted_center_x(yellow_mask, min_pixels=60)
         white_x, white_y = weighted_center_x(white_mask, min_pixels=100)
+        self._road_white_reference_used = False
+        # Preserve the broad mask for junction geometry, visibility and
+        # one-border fallback. Prefer the historical bright reference only
+        # when a complete lane is visible and enough bright white survives.
+        # Do not change the calibrated junction/corner handoff detector.
+        straight_road_tracking = (
+            getattr(self, "_junction_straight_visual_entry", False)
+            and getattr(self, "_active_turn", None) == "straight"
+            and getattr(self, "navigation_state", None) == "reacquiring")
+        ordinary_road = (not getattr(self, "_red_line_visible", False)
+                        and not getattr(self, "_junction_approach_active", False)
+                        and (straight_road_tracking or (
+                            getattr(self, "navigation_state", "following") in
+                            ("following", "awaiting_route", "route_complete")
+                            and getattr(self, "_junction_phase", "idle") in
+                            ("idle", "complete", "route_complete")))
+                        and getattr(self, "_sharp_corner_state", "idle") in ("idle", "cooldown"))
+        self._road_left_shape = (self.detect_left_road_curve(img_bgr)
+                                 if ordinary_road and getattr(self, "road_left_curve_boost", False) else None)
+        self._yellow_boundary_visible = yellow_x is not None
+        self._white_boundary_visible = white_x is not None
+        confirmed_curve_gap = (ordinary_road and getattr(self, "road_left_curve_boost", False)
+                               and self.left_road_yellow_gap_allowed(time.monotonic()))
+        road_white_mask = white_mask
+        if (ordinary_road and (yellow_x is not None or confirmed_curve_gap) and white_x is not None
+                and self.road_white_reference_value > self.white_lower[2]):
+            reference_lower = self.white_lower.copy()
+            reference_lower[2] = self.road_white_reference_value
+            reference = cv2.inRange(hsv, reference_lower, self.white_upper)
+            reference[:, :int(self.white_left_cutoff * w)] = 0
+            reference = cv2.morphologyEx(reference, cv2.MORPH_OPEN, kernel)
+            reference = cv2.morphologyEx(reference, cv2.MORPH_CLOSE, kernel)
+            reference_x, reference_y = weighted_center_x(reference, min_pixels=100)
+            if reference_x is not None and (yellow_x is None or reference_x - yellow_x >= 0.15 * w):
+                white_x, white_y = reference_x, reference_y
+                road_white_mask = reference
+                self._road_white_reference_used = True
+        self._road_curve_geometry = None
+        if ordinary_road and getattr(self, "road_left_lookahead", False):
+            self._road_curve_geometry = self.junction_lane_geometry(
+                yellow_mask, road_white_mask, w,
+                row_fractions=(0.04, 0.12, 0.20, 0.40, 0.55, 0.70, 0.85))
+            forward = self.road_forward_geometry(img_bgr)
+            if (sum(p["row_fraction"] <= .10 for p in forward["pairs"]) >= 2
+                    and sum(p["row_fraction"] >= .40 for p in forward["pairs"]) >= 2):
+                self._road_curve_geometry = forward
         self._yellow_boundary_visible = yellow_x is not None
         self._white_boundary_visible = white_x is not None
 
@@ -893,6 +1563,8 @@ class LaneFollowerNode(DTROS):
             cv2.line(debug_image, (int(pair["yellow_x"]), y),
                      (int(pair["white_x"]), y), (160, 80, 0), 1)
         self._lane_diagnostic = "Both boundaries"
+        self._road_left_gap_active = False
+        self._road_left_boost_gap_active = False
 
 
         if yellow_x is not None and white_x is not None:
@@ -903,6 +1575,7 @@ class LaneFollowerNode(DTROS):
                 self._lane_diagnostic = "Lane lost: reversed or narrow boundaries"
                 return None, debug_image, debug_mask
             self._lane_both_visible = True
+            self._left_curve_white_x = white_x
             lane_center_x = (yellow_x + white_x) / 2.0
             half_width = (white_x - yellow_x) / 2.0
             if self.temporal_lane_width_fallback:
@@ -925,11 +1598,26 @@ class LaneFollowerNode(DTROS):
                                      else "Yellow-only fallback")
             lane_center_x = yellow_x + half_width
         elif white_x is not None:
+            # Only continue a recently confirmed left curve. A generic missing
+            # yellow line is not a turn instruction. The absolute expiry is
+            # never refreshed by white-only frames, and a jumping white blob
+            # cannot carry the old turn forward.
+            curve_gap = (ordinary_road and getattr(self, "road_left_lookahead", False)
+                         and not self.manual_stop
+                         and self._left_curve_confirmed_at is not None
+                         and 0 <= time.monotonic()-self._left_curve_confirmed_at <= .8
+                         and self._left_curve_steering is not None
+                         and self._left_curve_white_x is not None
+                         and abs(white_x-self._left_curve_white_x) <= .12*w)
+            boost_gap = (ordinary_road and getattr(self, "road_left_curve_boost", False)
+                         and self.left_road_yellow_gap_allowed(time.monotonic()))
+            white_timeout = (max(self.temporal_lane_width_timeout, .8)
+                             if curve_gap or boost_gap else self.temporal_lane_width_timeout)
             use_temporal = (self.temporal_lane_width_fallback
                             and self._lane_half_width_px is not None
                             and self._lane_half_width_time is not None
                             and time.monotonic() - self._lane_half_width_time
-                            <= self.temporal_lane_width_timeout)
+                            <= white_timeout)
             if self.temporal_lane_width_fallback and not use_temporal:
                 self._lane_half_width_px = None
                 self._lane_half_width_time = None
@@ -945,6 +1633,13 @@ class LaneFollowerNode(DTROS):
                           else self.fallback_lane_width_fraction * w)
             self._lane_diagnostic = ("White-only temporal fallback" if use_temporal
                                      else "White-only fallback")
+            if curve_gap and use_temporal:
+                self._road_left_gap_active = True
+                self._left_curve_white_x = white_x
+                self._lane_diagnostic = "White-only confirmed left-curve continuation"
+            if boost_gap and use_temporal:
+                self._road_left_boost_gap_active = True
+                self._lane_diagnostic = "White-only confirmed curve: bounded yellow gap"
             lane_center_x = white_x - half_width
         else:
             self._lane_half_width_px = None
@@ -1299,13 +1994,26 @@ class LaneFollowerNode(DTROS):
         if not self.live.enabled:
             return
         now = time.monotonic() if now is None else now
+        paused_time = self.live.account_pause(now)
+        if paused_time:
+            # Pausing must not consume a turn's travel time or complete its
+            # timed entry while stationary. Sensor ages and the independent
+            # watchdog stay on real time. Active-motion limits are unchanged.
+            for name in ("_stop_started", "_crossing_started", "_reacquire_started",
+                         "_junction_deadline_at", "_junction_right_advance_started",
+                         "_sharp_corner_state_since", "_sharp_corner_cooldown_until"):
+                value = getattr(self, name)
+                if value is not None:
+                    setattr(self, name, value + paused_time)
         healthy = (self._camera_valid and now-self._last_frame_time <= self._camera_timeout
                    and not self.client_expired() and not self._client_connection_lost
                    and not self._fault_reason and not self._stopping
                    and (not self.require_client_heartbeat or self._active_client_id is not None))
         if observe or not healthy or not self.live_straight_evidence():
             self.live.observe_straight(now, healthy and self.live_straight_evidence())
-        self.live.tick(now, self.navigation_state, self.route_index, self._stop_started, healthy)
+        approach = ("%s->%s" % tuple(self.route[self.route_index-1:self.route_index+1])
+                    if self.route_enabled and 1 <= self.route_index < len(self.route) else None)
+        self.live.tick(now, self.navigation_state, self.route_index, self._stop_started, healthy, approach)
         if not self.live.active:
             self.manual_stop = True
             if self.navigation_state != "fault":
@@ -1321,11 +2029,22 @@ class LaneFollowerNode(DTROS):
         if not self.live.active:
             raise ValueError(self.live.end_reason)
         if action == "pause":
-            self.live.request_pause(command.get("seconds"))
+            self.live.request_pause(command.get("seconds"), time.monotonic())
             self._control_epoch += 1
-            self.live_tick()
-            if self.live.paused_at is not None:
-                self.publish_wheels(0.0, 0.0)
+            self.publish_wheels(0.0, 0.0)
+            # Require new continuity evidence after resuming; a still camera
+            # must not complete an outgoing-lane or corner recognition window.
+            for name in ("_lane_good_since", "_red_clear_since",
+                         "_junction_straight_corridor_since",
+                         "_junction_right_absent_since", "_junction_right_corridor_since",
+                         "_junction_right_near_since", "_junction_left_corridor_since",
+                         "_junction_left_near_since", "_junction_settle_good_since",
+                         "_sharp_corner_candidate_since", "_sharp_corner_reacquire_since",
+                         "_sharp_corner_white_since"):
+                setattr(self, name, None)
+            self._junction_encoder_start = None
+            self._junction_encoder_adjustment = 0.0
+            self._right_alignment_reference = None
         elif action == "resume":
             if (not self._camera_valid or time.monotonic()-self._last_frame_time > self._camera_timeout
                     or self.client_expired() or self._client_connection_lost or self._fault_reason):
@@ -1340,6 +2059,8 @@ class LaneFollowerNode(DTROS):
                 raise ValueError("Speed increases are available only on a confirmed straight section")
             self.live.profile = profile
         elif action == "junction_instruction":
+            if self.live.stop_after_junction and command.get("value") != "straight":
+                raise ValueError("This check permits one straight crossing only")
             if (self.navigation_state != "red_stop" or self.manual_stop
                     or self.live.paused_at is not None
                     or command.get("expected_route_index") != self.route_index):
@@ -1367,8 +2088,75 @@ class LaneFollowerNode(DTROS):
             self.live.instruction_id = command["id"]
             self.live.red_wait_at = self.live.red_index = None
 
+    def guard_road_heading(self, raw_steering):
+        """Limit an excessive centroid correction near a supported lane centre.
+
+        Whole-mask centroids sample yellow dashes and white tape at different
+        depths. A near-centred, aligned multi-row corridor can disprove their
+        requested magnitude without retuning established curve authority.
+        Values here are image errors, not measured physical angles.
+        """
+        geometry = self._junction_lane_geometry
+        eligible = (self.road_heading_guard and self.navigation_state == "following"
+                    and self._junction_phase in ("idle", "complete", "route_complete")
+                    and not self._junction_approach_active and not self._red_line_visible
+                    and self._sharp_corner_state in ("idle", "cooldown")
+                    and self._lane_both_visible and geometry is not None
+                    and geometry.get("valid") and geometry.get("near_support")
+                    and abs(geometry["lateral_error"]) <= 0.06
+                    and abs(geometry["heading_error"]) <= 0.08)
+        if eligible:
+            reference = (self.junction_straight_lateral_gain * geometry["lateral_error"]
+                         - self.junction_straight_heading_gain * geometry["heading_error"])
+            if raw_steering * reference < 0 or abs(raw_steering) > abs(reference):
+                self._road_heading_guard_used = True
+                return reference
+        return raw_steering
+
+    def anticipate_left_bend(self, raw_steering):
+        """Use visible far/near border pairs before the near centroid turns left.
+
+        This opt-in ordinary-road correction never invents a missing border or
+        changes a junction/pivot maneuver. Shared rows avoid pairing a near
+        yellow dash with distant white tape. Image heading is not a yaw angle.
+        """
+        g = self._road_curve_geometry
+        if not (self.road_left_lookahead and self.navigation_state == "following"
+                and self._junction_phase in ("idle", "complete", "route_complete")
+                and not self._junction_approach_active and not self._red_line_visible
+                and self._sharp_corner_state in ("idle", "cooldown")
+                and self._lane_both_visible and g is not None):
+            return raw_steering
+        pairs = g.get("pairs", [])
+        far = [p for p in pairs if p["row_fraction"] <= .20][:2]
+        near = [p for p in pairs if p["row_fraction"] >= .40]
+        if len(far) < 2 or len(near) < 2:
+            return raw_steering
+        # Reject an inverted perspective corridor and large left-of-lane
+        # offsets, for which ordinary centering must retain right authority.
+        if np.median([p["width"] for p in far]) >= np.median([p["width"] for p in near]):
+            return raw_steering
+        scale = g["image_width"] / 2.0
+        far_center = float(np.median([p["center_x"] for p in far]))
+        near_center = float(np.median([p["center_x"] for p in near]))
+        lateral = (near_center - self.junction_straight_lane_target_fraction * g["image_width"]) / scale
+        heading = (near_center - far_center) / scale
+        if heading <= .03 or lateral > .10:
+            return raw_steering
+        ratio = min(1.0, (heading - .03) / .05)
+        blend = ratio * ratio * (3.0 - 2.0 * ratio)
+        reference = -self.k_p * heading * blend
+        if reference < raw_steering:
+            self._road_left_lookahead_used = True
+            return reference
+        return raw_steering
+
     def compute_wheel_speeds(self, lane_error):
+        self._junction_forward_used = False
         now = time.monotonic()
+        self._road_heading_guard_used = False
+        self._road_left_lookahead_used = False
+        curve_boost = self.left_road_curve_boost_active(lane_error, now)
         dt = min(max(now - self._last_control_time, 0.001), 0.1)
         self._last_control_time = now
         # Preserve the previous tuning at 30 Hz, independent of actual frame rate.
@@ -1412,6 +2200,34 @@ class LaneFollowerNode(DTROS):
                                      + (self.k_p - self.near_center_k_p) * blend)
 
             raw_steering = effective_k_p * control_error + self.steering_bias
+            raw_steering = self.guard_road_heading(raw_steering)
+            raw_steering = self.anticipate_left_bend(raw_steering)
+            if (self._road_left_gap_active and self._left_curve_confirmed_at is not None
+                    and 0 <= now-self._left_curve_confirmed_at <= .8):
+                raw_steering = min(raw_steering, self._left_curve_steering)
+            elif (self._lane_both_visible
+                  and (self._road_left_lookahead_used
+                       or (self._left_curve_confirmed_at is not None
+                           and 0 <= now-self._left_curve_confirmed_at <= .8))
+                  and self.navigation_state == "following"
+                  and self._junction_phase in ("idle", "complete", "route_complete")
+                  and not self._junction_approach_active and not self._red_line_visible
+                  and self._sharp_corner_state in ("idle", "cooldown")
+                  and raw_steering <= -.03 and not self.manual_stop):
+                if self._left_curve_since is None:
+                    self._left_curve_since = now
+                if now-self._left_curve_since >= .2:
+                    self._left_curve_confirmed_at = now
+                    self._left_curve_steering = max(-self.max_steering, raw_steering)
+            else:
+                self._left_curve_since = self._left_curve_confirmed_at = None
+                self._left_curve_steering = None
+            if curve_boost:
+                # .115 +/- .085 gives left .03 / right .20 after the existing
+                # steering and output slew limits. Straight/junction tuning is
+                # untouched; loss of current curve evidence removes this target.
+                base_speed = .115
+                raw_steering = -.085 if self.flip_steering else .085
             raw_steering = float(np.clip(raw_steering, -self.max_steering, self.max_steering))
 
             steering = float(np.clip(
@@ -1425,7 +2241,7 @@ class LaneFollowerNode(DTROS):
         if self.flip_steering:
             steering = -steering
 
-        straight_profile = (self.live.enabled and self.live.active and self.live.straight
+        straight_profile = (not curve_boost and self.live.enabled and self.live.active and self.live.straight
                             and self.live_straight_evidence() and abs(steering) <= 0.025)
         if straight_profile:
             base_speed = min(PROFILES[self.live.profile], STRAIGHT_WHEEL_CAP-abs(steering))
@@ -1458,6 +2274,7 @@ class LaneFollowerNode(DTROS):
 
         return left_speed, right_speed, steering
 
+
     def publish_wheels(self, left_speed, right_speed):
         with self._wheel_lock:
             # Final gate also prevents an in-flight callback restarting the wheels.
@@ -1482,11 +2299,13 @@ class LaneFollowerNode(DTROS):
             dt = min(max(now - self._last_publish_time, 0.0), 0.1)
             # Ramp increases; stop commands and decreases take effect immediately.
             step = self.acceleration_limit * dt
-            if (self._active_turn == "right" and self._junction_right_visual_entry
+            if (((self._active_turn == "right" and self._junction_right_visual_entry)
+                 or (self._active_turn == "left" and self.junction_left_visual_latch
+                     and self._junction_left_visual_entry))
                     and self.junction_straight_visual_approach
                     and self.navigation_state == "reacquiring"
                     and left_speed > 0 and right_speed > 0):
-                # Independent ramps retained the pivot's outside-wheel power
+                # Independent ramps retained the turn's outside-wheel power
                 # while its inside wheel restarted, adding an unintended turn.
                 # A common scale preserves the requested visual steering ratio;
                 # neither wheel can increase faster than the existing limit.
@@ -1544,9 +2363,13 @@ class LaneFollowerNode(DTROS):
         if not self._departed_red:
             return "Departure red line has not cleared"
         if self._active_turn in ("straight", "left", "right") and self.junction_straight_visual_approach:
-            geometry = self._junction_lane_geometry
+            geometry = self.junction_exit_geometry()
             if geometry is None or not geometry.get("valid") or not geometry.get("near_support"):
                 return "Waiting for a near-field multi-row outgoing corridor"
+            if self._active_turn == "straight" and self._junction_straight_visual_entry:
+                return "Road following active; confirming near-field outgoing lane"
+            if self.straight_road_ready(geometry):
+                return "Waiting for stable outgoing lane ready for road following"
             if abs(geometry["lateral_error"]) >= self.junction_straight_reacquire_max_lateral:
                 return "Outgoing lane lateral alignment is outside the limit"
             if abs(geometry["heading_error"]) >= self.junction_straight_reacquire_max_heading:
@@ -1614,6 +2437,12 @@ class LaneFollowerNode(DTROS):
             "junction_last_result": self._last_junction_result,
             "junction_encoder_adjustment": self._junction_encoder_adjustment,
             "junction_lane_geometry": self._junction_lane_geometry,
+            "junction_exit_geometry": self._junction_exit_geometry,
+            "junction_straight_visual_entry": self._junction_straight_visual_entry,
+            "junction_white_boundary_guard": self.junction_white_boundary_guard,
+            "junction_white_guard_used": self._junction_white_guard_used,
+            "junction_white_guard_reason": self._junction_white_guard_reason,
+            "junction_white_geometry": self._junction_white_geometry,
             "junction_right_visual_entry": self._junction_right_visual_entry,
             "junction_right_tracking_trim": self.junction_right_tracking_trim,
             "junction_right_red_rearmed": self._junction_right_red_rearmed,
@@ -1680,6 +2509,9 @@ class LaneFollowerNode(DTROS):
             "obstacle_stop": self.obstacle_stop_latched,
             "obstacle_visible": self._obstacle_visible,
             "obstacle_box": self._obstacle_box,
+            "opencv_threads": cv2.getNumThreads(),
+            "camera_processing_seconds": self._camera_processing_seconds,
+            "last_camera_timeout": self._last_camera_timeout,
             "camera_valid": self._camera_valid,
             "camera_error": self._camera_error,
             "lane_diagnostic": self._lane_diagnostic,
@@ -1726,6 +2558,37 @@ class LaneFollowerNode(DTROS):
             "yellow_lower": self.yellow_lower.tolist(),
             "yellow_upper": self.yellow_upper.tolist(),
             "white_lower": self.white_lower.tolist(),
+            "road_white_reference_value": self.road_white_reference_value,
+            "road_white_reference_used": self._road_white_reference_used,
+            "road_heading_guard": self.road_heading_guard,
+            "road_heading_guard_used": self._road_heading_guard_used,
+            "junction_forward_geometry": self._junction_forward_geometry,
+            "junction_forward_used": self._junction_forward_used,
+            "road_left_curve_boost": self.road_left_curve_boost,
+            "road_left_curve_boost_active": self._road_left_boost_active,
+            "road_left_curve_yellow_gap_active": self._road_left_boost_gap_active,
+            "road_left_curve_confirmation_age": (
+                max(0.0, now-self._road_left_boost_last_seen)
+                if self._road_left_boost_last_seen is not None else None),
+            "road_left_curve_shape": self._road_left_shape,
+            "road_left_lookahead": self.road_left_lookahead,
+            "road_left_lookahead_used": self._road_left_lookahead_used,
+            "road_left_gap_active": self._road_left_gap_active,
+            "road_curve_geometry": self._road_curve_geometry,
+            "wheel_evidence": {
+                "executed": self._executed_wheels,
+                "executed_age": (None if self._executed_wheels_time is None
+                                 else now-self._executed_wheels_time),
+                "executed_samples": self._executed_samples,
+                "executed_zero_samples": self._executed_zero_samples,
+                "left_ticks": self._left_encoder_tick,
+                "right_ticks": self._right_encoder_tick,
+                "left_age": (None if self._left_encoder_time is None else now-self._left_encoder_time),
+                "right_age": (None if self._right_encoder_time is None else now-self._right_encoder_time),
+            },
+            "junction_left_visual_latch": self.junction_left_visual_latch,
+            "junction_left_visual_entry": self._junction_left_visual_entry,
+            "junction_left_red_rearmed": self._junction_left_red_rearmed,
             "white_upper": self.white_upper.tolist(),
             "filtered_lane_error": self.filtered_error,
             "steering_before_flip": self.prev_steering,
@@ -1782,6 +2645,17 @@ class LaneFollowerNode(DTROS):
             if self.live.enabled and (not self.live.active or self.live.paused_at is not None):
                 self.publish_wheels(0.0, 0.0)
             if time.monotonic() - self._last_frame_time > self._camera_timeout:
+                if self._camera_valid:
+                    now = time.monotonic()
+                    self._last_camera_timeout = {
+                        "at": now, "frame_age": now-self._last_frame_time,
+                        "receive_age": (None if self._last_camera_received_at is None
+                                        else now-self._last_camera_received_at),
+                        "processing_elapsed": (None if self._camera_processing_started_at is None
+                                               else now-self._camera_processing_started_at),
+                        "previous_processing_seconds": self._camera_processing_seconds,
+                    }
+                    rospy.logwarn("camera_timeout_details=%s", self._last_camera_timeout)
                 self._camera_valid = False
                 self._camera_error = "Camera timeout"
                 if self.avoidance_state not in ("idle", "fault"):
@@ -1899,7 +2773,11 @@ class LaneFollowerNode(DTROS):
                         raise ValueError("managed_session must be boolean")
                     new_live = LiveSession()
                     if managed:
-                        new_live.start(command.get("run_id"))
+                        new_live.start(command.get("run_id"), command.get("stop_at_next_red", False),
+                                       command.get("finish_approach"),
+                                       command.get("stop_after_junction", False),
+                                       command.get("finish_after_junction_red", False),
+                                       command.get("center_initial_straight", False))
                     self.live = new_live
                     self.speed_scale = 1.0
                     self.route, self.route_index = route, 1
@@ -1918,9 +2796,24 @@ class LaneFollowerNode(DTROS):
                     self._junction_approach_geometry_time = None
                     self._junction_approach_active = False
                     self._junction_stop_geometry = None
+                    self._junction_stop_white_seen = False
                     self._junction_approach_steering = 0.0
                     self._junction_settle_good_since = None
                     self._junction_settled = False
+                    self._junction_exit_geometry = None
+                    self._junction_straight_visual_entry = False
+                    self._junction_straight_corridor_since = None
+                    self._stop_started = self._crossing_started = self._reacquire_started = None
+                    self._crossing_updated = None
+                    self._crossing_progress = 0.0
+                    self._lane_good_since = self._red_clear_since = None
+                    self._departed_red = False
+                    self._junction_encoder_start = None
+                    self._junction_encoder_adjustment = 0.0
+                    self._right_alignment_reference = None
+                    self._junction_lane_geometry = None
+                    self._lane_half_width_px = self._lane_half_width_time = None
+                    self.reset_steering()
                     self.reset_sharp_corner()
                 elif action == "turn":
                     if self.live.enabled:
@@ -1979,6 +2872,9 @@ class LaneFollowerNode(DTROS):
             self._junction_phase = "departure_blocked"
             raise ValueError(blocker)
         self._active_turn = junction_turn(*self.route[self.route_index-1:self.route_index+2])
+        self._junction_straight_visual_entry = False
+        self._junction_straight_corridor_since = None
+        self._junction_exit_geometry = None
         self._crossing_started = time.monotonic()
         self._crossing_updated = self._crossing_started
         self._crossing_progress = 0.0
@@ -1994,7 +2890,9 @@ class LaneFollowerNode(DTROS):
         self._red_clear_since = self._lane_good_since = None
         self._departed_red = False
         self._junction_red_reappeared = False
-        self._junction_right_white_seen = bool(self._white_boundary_visible)
+        self._junction_right_white_seen = bool(
+            self._white_boundary_visible or self._junction_stop_white_seen)
+        self._junction_stop_white_seen = False
         self._right_alignment_reference = None
         self._right_alignment_adjustment = 0.0
         self._junction_right_near_since = None
@@ -2012,6 +2910,10 @@ class LaneFollowerNode(DTROS):
         self._junction_settle_good_since = None
         self._junction_settled = False
         self._junction_approach_active = False
+        self._junction_left_visual_entry = False
+        self._junction_left_corridor_since = None
+        self._junction_left_near_since = None
+        self._junction_left_red_rearmed = False
         self.navigation_state = "crossing"
         self.red_stop_latched = False
 
@@ -2043,17 +2945,129 @@ class LaneFollowerNode(DTROS):
         return (float(np.clip(speed - bias, 0.0, self.max_speed)),
                 float(np.clip(speed + bias, 0.0, self.max_speed)), bias)
 
+    def junction_exit_geometry(self):
+        if (self._active_turn == "straight"
+                and (self.require_client_heartbeat or self.live.enabled)
+                and self._junction_exit_geometry is not None):
+            return self._junction_exit_geometry
+        return self._junction_lane_geometry
+
+    def straight_road_ready(self, geometry):
+        """A near aligned corridor can already match the road follower's target.
+
+        The ordinary target (.441) and junction fit target (.49) intentionally
+        differ. Do not require a second lateral manoeuvre merely to satisfy the
+        latter before allowing the normal road controller to take ownership.
+        Heading, near support, ordered pairs and stability are still required.
+        """
+        return bool(
+            self._active_turn == "straight"
+            and (self.require_client_heartbeat or self.live.enabled)
+            and geometry is not None and geometry.get("valid")
+            and geometry.get("near_support") and self._lane_both_visible
+            and self._last_lane_error is not None
+            and math.isfinite(self._last_lane_error)
+            and abs(self._last_lane_error) < self.junction_reacquire_max_error
+            and abs(geometry["heading_error"])
+            < self.junction_straight_reacquire_max_heading
+            and abs(geometry["lateral_error"])
+            < (self.junction_straight_reacquire_max_lateral
+               + 2 * abs(self.junction_straight_lane_target_fraction
+                         - self.lane_target_fraction)))
+
+    def straight_road_corridor(self, geometry, near=False):
+        """Recognize a trackable road, without demanding a straight centreline.
+
+        Curve slope in image space is not a robot heading error. Requiring the
+        straight alignment threshold here kept E's instruction alive on E->C.
+        Paired longitudinal borders, visibility and bounded image errors still
+        reject distant/transverse fragments and unrelated side lanes.
+        """
+        return bool(
+            self._departed_red and self._lane_both_visible
+            and self._last_lane_error is not None
+            and math.isfinite(self._last_lane_error)
+            and abs(self._last_lane_error) < .35
+            and self.junction_geometry_steering_valid(geometry)
+            and geometry.get("pair_count", 0) >= 3
+            and geometry.get("row_span", 0.0) >= .36 - 1e-9
+            and geometry.get("pairs")
+            and geometry["pairs"][-1]["row_fraction"] >= .54
+            and abs(geometry["lateral_error"]) < .45
+            and abs(geometry["heading_error"]) < .35
+            and (not near or (geometry.get("valid") and geometry.get("near_support"))))
+
+    def update_straight_road_tracking(self, now):
+        if (self._active_turn != "straight"
+                or not (self.require_client_heartbeat or self.live.enabled)):
+            return False
+        if not self._junction_straight_visual_entry:
+            if self.straight_road_corridor(self.junction_exit_geometry()):
+                if self._junction_straight_corridor_since is None:
+                    self._junction_straight_corridor_since = now
+                elif now - self._junction_straight_corridor_since >= .30 - 1e-9:
+                    self._junction_straight_visual_entry = True
+                    self._junction_approach_active = False
+                    self._junction_encoder_start = None
+                    self._junction_encoder_adjustment = 0.0
+                    self.reset_steering()
+            else:
+                self._junction_straight_corridor_since = None
+        return self._junction_straight_visual_entry
+
     def straight_reacquisition_good(self):
-        geometry = self._junction_lane_geometry
+        geometry = self.junction_exit_geometry()
+        if self._active_turn == "straight" and self._junction_straight_visual_entry:
+            return self.straight_road_corridor(geometry, near=True)
         return bool(
             self._departed_red
             and geometry is not None
             and geometry.get("valid")
             and geometry.get("near_support")
-            and abs(geometry["lateral_error"])
-            < self.junction_straight_reacquire_max_lateral
             and abs(geometry["heading_error"])
-            < self.junction_straight_reacquire_max_heading)
+            < self.junction_straight_reacquire_max_heading
+            and (abs(geometry["lateral_error"])
+                 < self.junction_straight_reacquire_max_lateral
+                 or self.straight_road_ready(geometry)))
+
+    def left_junction_visual_entry(self, now):
+        """Leave the fixed arc on stable outgoing evidence, then keep aligning.
+
+        A mid-field corridor may be visible before the near yellow dash. Entry
+        needs ordered rows and a plausible heading; full route acceptance still
+        requires near-field centering, heading and the original stability time.
+        """
+        geometry = self._junction_lane_geometry
+        candidate = bool(
+            self._departed_red and self.junction_geometry_steering_valid(geometry)
+            and geometry.get("pair_count", 0) >= 3
+            and geometry.get("row_span", 0.0) >= 0.36 - 1e-9
+            and geometry.get("pairs")
+            and geometry["pairs"][-1]["row_fraction"] >= 0.54
+            and abs(geometry["lateral_error"]) < 0.25
+            and abs(geometry["heading_error"]) < 0.15)
+        if not self._junction_left_visual_entry:
+            if candidate:
+                if self._junction_left_corridor_since is None:
+                    self._junction_left_corridor_since = now
+                elif now - self._junction_left_corridor_since >= 0.10 - 1e-9:
+                    self._junction_left_visual_entry = True
+                    self.reset_steering()
+            else:
+                self._junction_left_corridor_since = None
+        if not self._junction_left_visual_entry:
+            return None
+        if not self.junction_geometry_steering_valid(geometry):
+            self.navigation_fault("Outgoing corridor lost after left arc; position must be reset")
+            return 0.0, 0.0, 0.0
+        self._junction_phase = "aligning"
+        _, speed, bias = self.junction_profile()
+        cap = min(self.max_speed, (speed + abs(bias)) * min(self.speed_scale, 1.0))
+        floor = min(cap, self.min_active_wheel_speed)
+        steering = float(np.clip(self.straight_visual_steering(geometry),
+                                 -(cap - floor) / 2.0, (cap - floor) / 2.0))
+        centre = cap - abs(steering)
+        return centre - steering, centre + steering, steering
 
     def right_junction_visual_entry(self, now):
         """End the pivot on a corridor; reserve near-field checks for completion."""
@@ -2164,7 +3178,11 @@ class LaneFollowerNode(DTROS):
                 self.reset_sharp_corner()
                 self.red_stop_latched = True
                 self._stop_started = now
-                self.navigation_state = "red_stop"
+                self._junction_stop_white_seen = bool(self._white_boundary_visible)
+                self.navigation_state = (
+                    "route_complete" if self.route_enabled and not self.live.enabled
+                    and self.route_index == len(self.route) - 1 else "red_stop")
+                self._junction_phase = self.navigation_state
                 return 0.0, 0.0, 0.0
             return None
         if active and (self.manual_stop or self.obstacle_stop_latched
@@ -2332,21 +3350,31 @@ class LaneFollowerNode(DTROS):
             else:
                 self._red_clear_since = None
             duration, _, _ = self.junction_profile()
-            if self._active_turn == "right" and self._junction_right_visual_entry:
+            visual_turn = (self._active_turn == "right" and self._junction_right_visual_entry
+                           or self._active_turn == "left" and self.junction_left_visual_latch
+                           and self._junction_left_visual_entry)
+            if visual_turn:
+                turn = self._active_turn
+                near_field = "_junction_%s_near_since" % turn
+                rearmed_field = "_junction_%s_red_rearmed" % turn
                 geometry = self._junction_lane_geometry or {}
                 if geometry.get("valid") and geometry.get("near_support") and not red_visible:
-                    if self._junction_right_near_since is None:
-                        self._junction_right_near_since = now
-                    if now - self._junction_right_near_since >= 0.30 - 1e-9:
-                        self._junction_right_red_rearmed = True
+                    if getattr(self, near_field) is None:
+                        setattr(self, near_field, now)
+                    if now - getattr(self, near_field) >= 0.30 - 1e-9:
+                        setattr(self, rearmed_field, True)
                 else:
-                    self._junction_right_near_since = None
-                if red_visible and self._junction_right_red_rearmed:
+                    setattr(self, near_field, None)
+                if red_visible and getattr(self, rearmed_field):
                     # A stable near-field outgoing corridor followed by a red
                     # line is the next junction, even if strict centring did
                     # not finish on a short connecting road. Commit exactly
                     # one route edge and handle that new line as a normal stop.
                     self.red_stop_latched = True
+                    # This outgoing corridor already established its white
+                    # border. Retain that observation through the red dwell,
+                    # even if the border ends underneath the camera meanwhile.
+                    self._junction_stop_white_seen = True
                     self.route_index += 1
                     self._active_turn = None
                     self._junction_deadline_at = None
@@ -2358,7 +3386,7 @@ class LaneFollowerNode(DTROS):
                     self._junction_phase = self.navigation_state
                     self._last_junction_result = {
                         "outcome": "reacquired_at_next_red",
-                        "turn": "right",
+                        "turn": turn,
                         "route_index": self.route_index,
                         "alignment": "contained_not_settled",
                     }
@@ -2420,9 +3448,12 @@ class LaneFollowerNode(DTROS):
                     self.navigation_state = "reacquiring"
                     self._reacquire_started = now
                     self._junction_phase = "searching"
+                road_tracking = False
+                if self.junction_straight_visual_approach:
+                    road_tracking = self.update_straight_road_tracking(now)
                 if (self._active_turn in ("straight", "left", "right")
                         and self.junction_straight_visual_approach):
-                    good_lane = self.straight_reacquisition_good()
+                    good_lane = road_tracking or self.straight_reacquisition_good()
                 else:
                     good_lane = (self._departed_red and self._lane_both_visible
                                  and lane_error is not None
@@ -2431,7 +3462,10 @@ class LaneFollowerNode(DTROS):
                     self._junction_phase = "aligning"
                     if self._lane_good_since is None:
                         self._lane_good_since = now
-                    required = (self.junction_straight_reacquire_seconds
+                    # A stable road corridor finishes the whole straight
+                    # maneuver. Do not leave a search deadline attached to the
+                    # road follower while waiting for a second alignment gate.
+                    required = (0.0 if road_tracking else self.junction_straight_reacquire_seconds
                                 if self._active_turn in ("straight", "left", "right")
                                 and self.junction_straight_visual_approach else 0.3)
                     if now - self._lane_good_since >= required:
@@ -2439,20 +3473,44 @@ class LaneFollowerNode(DTROS):
                         self.route_index += 1
                         self.navigation_state = "following"
                         self._active_turn = None
+                        # App routes may curve immediately after the crossing.
+                        # Stable reacquisition already established the outgoing
+                        # lane: release junction steering to the proven road
+                        # follower instead of demanding a straight settling road.
+                        road_handoff = (completed_turn == "straight"
+                                        and (self.require_client_heartbeat or self.live.enabled))
                         self._junction_phase = (
                             "settling" if completed_turn == "straight"
-                            and self.junction_straight_visual_approach else "complete")
+                            and self.junction_straight_visual_approach
+                            and not road_handoff else "complete")
                         self._junction_deadline_at = None
                         self._last_junction_result = {
                             "outcome": "reacquired",
                             "turn": completed_turn,
                             "route_index": self.route_index,
-                            "alignment": ("settling" if completed_turn == "straight"
+                            "alignment": ("lane_following" if road_handoff else
+                                          "settling" if completed_turn == "straight"
                                           and self.junction_straight_visual_approach
                                           else "not_required"),
                         }
-                        self.filtered_error = self.prev_steering = 0.0
+                        if not road_tracking:
+                            self.filtered_error = self.prev_steering = 0.0
                         self._junction_approach_steering = 0.0
+                        if self.live.enabled and self.live.stop_after_junction:
+                            # Stop in the same control tick as confirmed lane
+                            # reacquisition, independently of laptop polling.
+                            self.live_tick(now)
+                            self.publish_wheels(0.0, 0.0)
+                            return 0.0, 0.0, 0.0
+                        if road_handoff:
+                            self._crossing_started = self._reacquire_started = None
+                            self._crossing_updated = None
+                            self._crossing_progress = 0.0
+                            self._lane_good_since = self._junction_straight_corridor_since = None
+                            self._junction_approach_active = False
+                            self._junction_encoder_start = None
+                            self._junction_encoder_adjustment = 0.0
+                            return self.compute_wheel_speeds(lane_error)
                         visual = self.straight_visual_wheels(self.base_speed * self.speed_scale)
                         if visual is not None and completed_turn == "straight":
                             self.update_straight_settling(visual[2], now)
@@ -2476,6 +3534,9 @@ class LaneFollowerNode(DTROS):
                     return self.planned_junction_wheels()
                 if (self._active_turn in ("left", "right")
                         and self.junction_straight_visual_approach):
+                    if self._active_turn == "left" and self.junction_left_visual_latch:
+                        visual = self.left_junction_visual_entry(now)
+                        return visual if visual is not None else self.planned_junction_wheels()
                     if self._active_turn == "right":
                         visual = self.right_junction_visual_entry(now)
                         if visual is not None:
@@ -2520,9 +3581,16 @@ class LaneFollowerNode(DTROS):
             self._junction_phase = (
                 "entry" if elapsed < self.junction_entry_seconds
                 else "straight" if self._active_turn == "straight" else "turning")
+            if (self._active_turn == "straight" and self.junction_straight_visual_approach
+                    and elapsed >= self.junction_entry_seconds):
+                forward = self.straight_forward_wheels(
+                    self.junction_straight_speed * min(self.speed_scale, 1.0))
+                if forward is not None:
+                    return forward
             return self.planned_junction_wheels(
                 apply_turn=elapsed >= self.junction_entry_seconds)
         if red_visible and not self.red_stop_latched:
+            self._junction_stop_white_seen = bool(self._white_boundary_visible)
             if (state == "following" and self.junction_straight_visual_approach
                     and (self.live.active or self.upcoming_junction_turn() == "straight")):
                 recent = (self._junction_approach_geometry is not None
@@ -2578,6 +3646,7 @@ class LaneFollowerNode(DTROS):
                 self.avoidance_fault("Invalid camera during passing")
             self._lane_limits = None
             self._junction_lane_geometry = None
+            self._junction_exit_geometry = None
             self._lane_both_visible = False
             self._yellow_boundary_visible = False
             self._white_boundary_visible = False
@@ -2597,10 +3666,12 @@ class LaneFollowerNode(DTROS):
 
     def callback(self, msg):
         received_at = time.monotonic()
+        self._last_camera_received_at = received_at
         # Serialize image callbacks without blocking Stop, shutdown or the watchdog.
         with self._camera_lock:
             if self._stopping:
                 return
+            self._camera_processing_started_at = received_at
             try:
                 stamp = self.camera_stamp(msg, received_at)
                 img_bgr = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -2641,6 +3712,10 @@ class LaneFollowerNode(DTROS):
                     self._last_lane_error = lane_error
                     self._lane_limits = perception._lane_limits
                     self._junction_lane_geometry = perception._junction_lane_geometry
+                    self._junction_exit_geometry = perception._junction_exit_geometry
+                    self._junction_forward_geometry = perception._junction_forward_geometry
+                    self._junction_white_geometry = perception._junction_white_geometry
+                    self._junction_white_width_reference = perception._junction_white_width_reference
                     self._lane_both_visible = perception._lane_both_visible
                     self._yellow_boundary_visible = perception._yellow_boundary_visible
                     self._white_boundary_visible = perception._white_boundary_visible
@@ -2649,6 +3724,12 @@ class LaneFollowerNode(DTROS):
                     self._lane_half_width_px = perception._lane_half_width_px
                     self._lane_half_width_time = perception._lane_half_width_time
                     self._lane_diagnostic = perception._lane_diagnostic
+                    self._road_white_reference_used = perception._road_white_reference_used
+                    self._road_curve_geometry = perception._road_curve_geometry
+                    self._road_left_shape = perception._road_left_shape
+                    self._road_left_gap_active = perception._road_left_gap_active
+                    self._road_left_boost_gap_active = perception._road_left_boost_gap_active
+                    self._left_curve_white_x = perception._left_curve_white_x
                     self._duck_boxes = perception._duck_boxes
                     self._road_geometry = perception._road_geometry
                     self.check_client_connection()
@@ -2667,11 +3748,16 @@ class LaneFollowerNode(DTROS):
                         self._obstacle_visible = obstacle_box is not None
                         self._obstacle_clear_since = None
                         left_speed, right_speed, steering = avoidance
+                    left_speed, right_speed, steering = self.junction_white_guard_wheels(
+                        left_speed, right_speed, steering)
                     self.publish_wheels(left_speed, right_speed)
             except (CvBridgeError, cv2.error, ValueError, TypeError, AttributeError) as error:
                 rospy.logwarn("Could not process camera image: %s", error)
                 self.reject_camera(error)
                 return
+            finally:
+                self._camera_processing_seconds = time.monotonic()-received_at
+                self._camera_processing_started_at = None
 
         if self.show_debug and not self._stopping:
             cv2.putText(debug_image, self._lane_diagnostic, (10, 90),
@@ -2710,6 +3796,24 @@ class LaneFollowerNode(DTROS):
             cv2.imshow("duckiebot_lane_mask", debug_mask)
             cv2.waitKey(1)
 
+        if ((self.navigation_state in ("crossing", "reacquiring")
+             or (self.junction_white_boundary_guard and self._junction_approach_active
+                 and self.navigation_state == "following"))
+                and self.frame_count % 5 == 0):
+            rospy.loginfo("junction_trace=" + json.dumps({
+                "state": self.navigation_state, "phase": self._junction_phase,
+                "turn": self._active_turn, "route_index": self.route_index,
+                "lane_error": lane_error, "lane_diagnostic": self._lane_diagnostic,
+                "wheels": self._last_wheel_speeds,
+                "steering_geometry": self._junction_lane_geometry,
+                "exit_geometry": self._junction_exit_geometry,
+                "forward_geometry": self._junction_forward_geometry,
+                "forward_used": self._junction_forward_used,
+                "white_geometry": self._junction_white_geometry,
+                "white_guard_used": self._junction_white_guard_used,
+                "white_guard_reason": self._junction_white_guard_reason,
+                "blocker": self.junction_reacquisition_blocker(),
+            }, separators=(",", ":")))
         if self.frame_count % 20 == 0:
             lane_error_str = "None" if lane_error is None else f"{lane_error:.3f}"
             rospy.loginfo(
@@ -2741,5 +3845,6 @@ class LaneFollowerNode(DTROS):
 
 
 if __name__ == "__main__":
+    cv2.setNumThreads(1)
     lane_follower_node = LaneFollowerNode(node_name="lane_follower_node")
     rospy.spin()

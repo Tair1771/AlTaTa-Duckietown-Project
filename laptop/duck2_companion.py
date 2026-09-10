@@ -89,7 +89,12 @@ def point_segment_distance(px, py, ax, ay, bx, by):
 
 
 class CompanionWindow:
-    def __init__(self, root, bench=False):
+    def __init__(self, root, bench=False, pause_check=False, junction_chat_check=False, straight_crossing_check=False,
+                 initial_straight_chat_check=False):
+        self.pause_check = pause_check
+        self.junction_chat_check = junction_chat_check
+        self.straight_crossing_check = straight_crossing_check
+        self.initial_straight_chat_check = initial_straight_chat_check
         self.root = root
         self.bench = bench
         self.session = OfflineCompanionSession()
@@ -399,9 +404,7 @@ class CompanionWindow:
         self.message_entry.bind("<Shift-Return>", lambda event: None)
         ttk.Button(chat, text="Send message", command=self.send_chat).grid(
             row=3, column=0, columnspan=2, sticky="ew")
-        self._append_chat("Duck2", "Try 'next right', 'left after that', 'pause for 5 seconds', "
-                          "'continue', or 'normal speed'. Stop means pause on a straight. "
-                          "STOP DUCK2 or 'quit' ends the run immediately.")
+        self._append_chat("Duck2", "Ready for your instructions.")
         self.control_url = tk.StringVar(value="http://127.0.0.1:18765" if self.bench else "http://127.0.0.1:8765")
         ttk.Entry(connection, textvariable=self.control_url, width=24, state="readonly" if self.bench else "normal").pack(
             fill="x", pady=(0, 7))
@@ -417,7 +420,10 @@ class CompanionWindow:
         actions.grid(row=2, column=0, sticky="sew", pady=(10, 0))
         self.route_actions = ttk.Frame(actions, style="App.TFrame")
         self.route_actions.pack(fill="x")
-        ttk.Checkbutton(self.route_actions, text="Live chat (ask when queue ends)",
+        ttk.Checkbutton(self.route_actions,
+                        text=("Pause check — end at next red line" if self.pause_check
+                              else "Live chat (ask when queue ends)"),
+                        state="disabled" if self.pause_check or self.junction_chat_check or self.straight_crossing_check or self.initial_straight_chat_check else "normal",
                         variable=self.live_chat_enabled).pack(anchor="w", pady=(0, 5))
         ttk.Checkbutton(self.route_actions,
                         text="On the selected starting lane\nand outside the intersection",
@@ -430,7 +436,7 @@ class CompanionWindow:
         self.control_stop_button = self._stop_button(actions)
         self.control_stop_button.pack(fill="x")
         stop_hint = ttk.Label(actions,
-                  text=("Live chat waits at red lines for instructions (30s limit). "
+                  text=("Live chat waits at red lines for instructions (60s limit). "
                         "Map-only mode ends at its destination. Closing requests Stop."),
                   style="Hint.TLabel", wraplength=220, justify="left")
         stop_hint.pack(fill="x", pady=(8, 0))
@@ -618,13 +624,16 @@ class CompanionWindow:
             try:
                 self.events.put((kind, operation()))
             except Exception as error:
-                self.events.put(("control_error", str(error)))
+                self.events.put(("route_start_error" if kind == "route_started" else "control_error", str(error)))
             finally:
                 if kind == "control_status":
                     self.control_polling = False
         threading.Thread(target=work, daemon=True).start()
 
     def connect_control(self):
+        if self.route_start_pending:
+            self.status.set("Wait for Start to finish, or use STOP DUCK2 before reconnecting.")
+            return
         if self.live_session is not None and self.live_session.active:
             self.status.set("End the current run before replacing its connection.")
             return
@@ -702,7 +711,7 @@ class CompanionWindow:
                 self._update_route_button()
             elif kind == "route_started":
                 self.route_start_pending = False
-                if value is None:
+                if value is None or self.stop_requested:
                     self.status.set("Start was cancelled; Stop takes priority.")
                     self._update_route_button()
                     continue
@@ -720,8 +729,11 @@ class CompanionWindow:
                 self.queue_summary.set(value[0])
                 for message in value[1]:
                     self._append_chat("Duck2", message)
-            elif kind == "control_error":
-                self.route_start_pending = False
+            elif kind in ("control_error", "route_start_error"):
+                # A heartbeat/status failure does not finish an in-flight
+                # Start. Keep duplicate Starts blocked until that worker ends.
+                if kind == "route_start_error":
+                    self.route_start_pending = False
                 self.control_connected = False
                 self.connection_badge.set("●  CONNECTION ERROR")
                 self.robot_state.set(value)
@@ -734,6 +746,10 @@ class CompanionWindow:
         with self.control_operation_lock:
             if generation != self.start_generation or self.closed:
                 return None
+            if self.junction_chat_check:
+                reported = transport.poll_status().get("live_session") or {}
+                if reported.get("red_wait_seconds", 0) < 60:
+                    raise RuntimeError("Prepare the 60-second red-wait controller before starting this check.")
             self.live_session = None
             self.stop_requested = False
             result = start_route(transport, plan,
@@ -754,6 +770,10 @@ class CompanionWindow:
         if self.route_start_pending:
             self.status.set("A route Start request is already in progress.")
             return
+        if (self.initial_straight_chat_check and self.session.plan
+                and self.session.plan.route != ("A", "E", "B")):
+            self.status.set("Select A → E → B and place duck2 after the A → E curve on the straight.")
+            return
         if not (self.position_confirmed.get() and self.session.plan
                 and self.session.draft_valid and self.control_connected):
             self.status.set("Connect, select both route endpoints, and confirm placement first.")
@@ -762,8 +782,14 @@ class CompanionWindow:
         self.route_start_pending = True
         self._update_route_button()
         plan, transport, generation = self.session.plan, self.transport, self.start_generation
-        live = (LiveChatSession(plan.start_approach, plan.turns)
-                if self.live_chat_enabled.get() else None)
+        live = (LiveChatSession(plan.start_approach,
+                               () if self.pause_check else ("straight",) if self.straight_crossing_check else plan.turns,
+                               stop_at_next_red=self.pause_check,
+                               finish_approach="C->B" if self.junction_chat_check else None,
+                               stop_after_junction=self.straight_crossing_check,
+                               finish_after_junction_red=self.initial_straight_chat_check,
+                               center_initial_straight=self.initial_straight_chat_check)
+                if self.live_chat_enabled.get() or self.pause_check or self.junction_chat_check or self.straight_crossing_check or self.initial_straight_chat_check else None)
         self._background(lambda: self._start_route(transport, plan, generation, live), "route_started")
 
     def stop_robot(self):
@@ -933,9 +959,57 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--bench", action="store_true", help="Use isolated simulation on ports 18765/18766")
+    scenario = parser.add_mutually_exclusive_group()
+    scenario.add_argument("--pause-check", action="store_true", help="Live-chat straight check; end at the next red line")
+    scenario.add_argument("--junction-chat-scenario", "--junction-chat-check", dest="junction_chat_check",
+                          action="store_true", help="A-E-B-C with live overrides; finish at the C-to-B red line")
+    scenario.add_argument("--straight-crossing-check", action="store_true",
+                          help="A-E approach, pause and cross E straight; stop at outgoing-lane reacquisition")
+    scenario.add_argument("--initial-straight-chat-check", action="store_true",
+                          help="A-E-B with chat override; stop at the next red after E; start after the A-E curve")
     args = parser.parse_args()
     root = tk.Tk()
-    CompanionWindow(root, bench=args.bench)
+    window = CompanionWindow(root, bench=args.bench, pause_check=args.pause_check,
+                             junction_chat_check=args.junction_chat_check,
+                             straight_crossing_check=args.straight_crossing_check,
+                             initial_straight_chat_check=args.initial_straight_chat_check)
+    if args.pause_check:
+        root.title("duck2 companion — pause check (ends at next red line)")
+        window.choose_start("A->E")
+        window.choose_destination("A->E")
+        window.notebook.select(window.workspace_tab)
+        window.control_notebook.select(1)
+        window._append_chat("Duck2", "Selected route: A → E.")
+        # Connecting and viewing never send set_route, Continue, or Start.
+        root.after(300, window.connect_control)
+        root.after(400, window.start_camera)
+    elif args.initial_straight_chat_check:
+        root.title("duck2 companion — initial straight and junction")
+        window.choose_start("A->E")
+        window.choose_destination("E->B")
+        window.notebook.select(window.workspace_tab)
+        window.control_notebook.select(1)
+        window._append_chat("Duck2", "Selected route: A → E → B. Stop at the destination red line; a turn override updates the destination.")
+        root.after(300, window.connect_control)
+        root.after(400, window.start_camera)
+    elif args.straight_crossing_check:
+        root.title("duck2 companion — single straight crossing")
+        window.choose_start("A->E")
+        window.choose_destination("E->C")
+        window.notebook.select(window.workspace_tab)
+        window.control_notebook.select(1)
+        window._append_chat("Duck2", "Selected route: A → E → C. End after outgoing-lane reacquisition at E.")
+        root.after(300, window.connect_control)
+        root.after(400, window.start_camera)
+    elif args.junction_chat_check:
+        root.title("duck2 companion")
+        window.choose_start("A->E")
+        window.choose_destination("B->C")
+        window.notebook.select(window.workspace_tab)
+        window.control_notebook.select(1)
+        window._append_chat("Duck2", "Selected route: A → E → B → C.")
+        root.after(300, window.connect_control)
+        root.after(400, window.start_camera)
     root.mainloop()
 
 

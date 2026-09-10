@@ -1,5 +1,635 @@
 # Testing status
 
+## 2026-09-10 — normal live-chat release and review
+
+**Latest physical result: incomplete.** The user reports that duck2 did not
+curve enough and stopped. This is not accepted full-route validation. No new
+physical movement or calibration change was made during this release review.
+
+The normal companion enables live chat by default: selected map turns seed
+the queue, messages change future junction choices, timed pauses take effect
+on robot acceptance, and straight-road speed profiles remain separate from
+curve and junction profiles. When the queue ends, the bot stops at a red line,
+asks for a direction and waits up to 60 seconds. Optional scenario restrictions
+do not apply to the normal launcher. Initial-straight centering remains opt-in
+for the explicitly placed straight-path check.
+
+Review fixes: reconnect is blocked during Start; background connection errors
+cannot unlock a second Start while the first remains pending; a queued Start
+result cannot replace the UI's Stop outcome. Final lane reporting reconciles
+only an acknowledged instruction with matching outgoing lane, index and turn.
+Camera HTTP failures are distinguished from network timeouts, and invalid
+capture timestamps are rejected. The preview's session-free detector helper
+is included in this release, fixing its earlier frame-processing exception.
+
+Verification: 562 native tests completed, with 559 passing and three platform
+skips; 80 Python sources, documentation links and Windows launcher targets
+passed inspection. Network-isolated HTTP/ROS checks passed real normal/mask/
+overlay delivery, all speed profiles, immediate zero, a measured 7.093-second
+synthetic pause/resume interval, final-red stopping, scenario isolation, and
+the normal map queue → straight override → C red prompt → left instruction →
+Stop sequence. These are synthetic wheel requests and software observations,
+not measurements of track containment. Source and PDF include all three authors.
+The broader disposable ROS suite also passed (71 prerequisite tests plus its
+real ROS transport checks), including red dwell, route progress, heartbeat loss,
+camera loss, pause/resume and Stop. Its local evidence is retained outside Git
+under bench-checks run `20260910T185021Z-b9ce8a35`.
+
+The earlier dated sections below retain diagnostic history; the current
+entry points are [STARTUP](STARTUP.md), [USAGE](USAGE.md) and [LIVE_CHAT](LIVE_CHAT.md).
+
+## 2026-09-10 — test workflow ended; companion app restored
+
+At the user's request, removed the experimental paired road-path controller and
+encoder-coast assistance, including their preview additions and focused tests.
+Restored the continuous app profile used before these two experiments, retaining
+the earlier red-stop and junction fixes. The test supervisor is not running.
+Controller startup remains stopped; route selection and Start belong to the
+user in the companion app. No new physical test was run during this restoration.
+The experiment entries below are historical and do not describe active code.
+This restores a prior profile; it does not establish reliable full-route driving.
+
+## 2026-09-10 — fresh video diagnosis and paired road path
+
+Run `20260910T125513-full-route-AEBC-encoder-left-assist` stopped after about
+seven seconds with `Lane lost: boundary gap exceeded`. The user reports no
+effective left turn; the supplied external video agrees with forward travel
+toward the bend. Requested and executed zero output were verified afterward.
+The encoder assistance never activated. Initial requested wheels were about
+0.109/0.071 (a right correction); the lane estimate only turned negative shortly
+before yellow vanished from the lower image region. This run does not establish
+a motor-power fault. The primary demonstrated error is late/wrong-direction
+visual steering, followed by expiry of the 0.3-second white-only fallback.
+
+Continuous mode now enables `road_paired_path` in both controller and camera
+preview. It traces visible yellow and white stripe runs at matching image rows,
+rejects insufficient/disconnected/perspectively implausible pairs, and measures
+near position and forward direction separately. Lookahead uses observed pairs
+at image height 0.45--0.50 and near position up to 0.75, without extrapolating
+an unseen boundary. The 0.49 image reference belongs to paired geometry; the
+ordinary legacy centroid target remains 0.441. The paired controller uses no
+centroid trim, applies a small noise band, and retains smoothing, steering slew,
+acceleration and wheel caps. Current geometry replaces remembered curve steering
+as the road straightens. Intersections, red stops and sharp-corner phases retain
+their previous control. Missing-image and actual lane-loss stopping remain.
+The unverified encoder coast experiment is disabled in this profile.
+
+Offline results: 63 focused paired-path, camera, lane/reference and red-route
+tests passed; syntax, documentation links and launcher targets passed. Sparse
+recorded-frame replay, holding each saved frame until the next recorded frame
+time, requests equal wheels on the first two straight views, then a left turn
+before yellow loss (approximately 0.044/0.136, followed by 0.03/0.20). It still
+stops on the final genuinely lost-lane view. These are replay requests, not new
+executed motor measurements or a simulation of the corrected trajectory.
+The earlier accepted 19-frame sequence was also inspected: path steering reduces
+as the curve exits. Synthetic tests cover centering, heading, dashed markings,
+straightening, false fragments, Stop, stale camera, and perception-to-controller
+callback transfer. All raw evidence, video contact sheets and replay details
+remain outside the repository under `Duck2/diagnostics/20260910-fresh-curve`.
+Physical success of this revision is pending a fresh supervised Go.
+
+## 2026-09-10 — provisional encoder-assisted left curve
+
+The restored continuous profile now opts into `road_left_encoder_assist`.
+Vision, red-stop/junction behavior, outer-wheel power and existing stopping
+checks remain unchanged. During an ordinary-road strong left request only,
+fresh camera, executed-command and encoder evidence must agree. If both wheels
+are advancing but their normalized count difference is below 0.08, the inner
+left wheel receives zero for a target 0.15-second coast, followed by a 0.35-second
+cooldown and a new measurement window. Restoration occurs on a camera callback;
+the independent camera watchdog still stops stale-image operation. This is not
+a calibrated steering angle or a hard real-time 0.15-second motor pulse.
+
+The threshold provisionally separates the recorded failed 72/82 differential
+from the earlier accepted 420/508 differential. Different observation windows
+and track poses limit that comparison; a physical retry is still required.
+Straight/right requests, junctions, missing boundaries, stale feedback, encoder
+resets and stalled wheels do not enable this assistance. Ordinary launchers
+retain the default disabled setting.
+
+Offline: nine focused assist tests and 32 lane/red-route/reference regressions
+passed. Nineteen accepted frames reproduced the original perception and wheel
+mixing with assistance disabled; these frames alone do not validate the new
+encoder assistance. No physical run was performed during this change.
+
+### Restored-profile observation and wheel evidence
+
+The user reports no visible turning and stopping before the curve in
+`20260910T124730-full-route-AEBC-restored-accepted-curve`. Red detection stayed
+false. Executed-wheel feedback followed requested output, and the cumulative
+zero-feedback count stayed at 676 through the moving samples, increasing at the
+final lane-loss stop. There is no recorded intermittent-zero sequence explaining
+the reported lack of turning.
+
+The controller initially requested a slight right correction and only requested
+strong left steering around 6.31 seconds (0.03/0.1745, rising to 0.03/0.20).
+From 6.31 to 7.75 seconds, left/right encoder counts increased 72/82: the right
+wheel rotated only modestly farther despite the large requested difference.
+This establishes late steering and weak realized wheel differential, not a
+calibrated turn radius or a diagnosed physical defect. A further perception
+retune alone cannot be assumed to solve it. No settings or movement changed
+during this read-only diagnosis; duck2 remains manually stopped.
+
+## 2026-09-10 — restored accepted curve profile retry
+
+After a fresh Go, ran A -> E -> B -> C with road heading guard and left
+lookahead disabled, the accepted curve parameters restored, and the red/junction
+fixes retained. Both boundaries and zero executed output were checked before
+Start. The run again stopped with `Lane lost: boundary gap exceeded`, before
+a junction. Stop and zero requested/executed output were verified. Evidence:
+`Duck2/evidence/20260910T124730-full-route-AEBC-restored-accepted-curve`, outside
+the repository. The user subsequently reported no visible turning and stopping
+before the curve (see the wheel-evidence analysis above). No settings were changed
+during or after the run, and no automatic retry was started.
+
+## 2026-09-10 — restore the accepted curve profile
+
+The user reports premature left turning across yellow followed by straightening
+toward white, and requests restoring the normal successful curve behavior.
+They covered red tape outside the road and explicitly requested no change that
+ignores those reds. Red detection remains unchanged.
+
+The continuous launcher now explicitly disables `road_heading_guard` and
+`road_left_lookahead`. This also disables forward-border anticipation and the
+extended confirmed-left-curve yellow-gap behavior. The original 0.30-second
+white-only fallback, calibrated steering, speed limits, colour thresholds and
+bright-white reference remain. Experimental helpers are inactive. The left-exit
+handoff and second-red stop/dwell/route transition fixes are retained, as is
+read-only wheel feedback. No motor calibration or red threshold was altered.
+
+A comparison against the saved source/launcher preceding the full-route drift
+changes confirms identical lane errors and wheel commands on all 19 frames from
+`20260910T112401-continuous-left-reference-retry`, which the user called perfect.
+All original launcher parameter values match that snapshot. The 32 focused lane,
+white-reference and second-red tests passed. At the user's request, the full
+regression and container build were not repeated for this configuration rollback.
+Comparison evidence is outside Git at
+`Duck2/diagnostics/20260910-restore-accepted-curve`. This replay does not guarantee
+a new physical trajectory; a fresh Go is required. No Git operations occurred.
+
+## 2026-09-10 — unchanged forward-curve repeat
+
+The user explicitly requested the same test again and supplied a fresh Go.
+No source, launcher or parameter changes were made. The camera showed the
+starting approach with both borders; requested and executed output were zero.
+The repeat again stopped with `Lane lost: boundary gap exceeded` before a
+junction. Stop and zero requested/executed output were verified. Evidence is
+retained outside Git at
+`Duck2/evidence/20260910T124132-full-route-AEBC-forward-curve-continuation`.
+Physical observations are pending; no automatic further run was started.
+
+## 2026-09-10 — forward-curve continuation retry
+
+After a fresh Go, the A -> E -> B -> C routine ran with current camera,
+both boundaries initially visible, zero executed feedback and sole controller
+ownership. It stopped on `Lane lost: boundary gap exceeded` before a junction.
+Stop was sent and manual stop with zero requested output was confirmed.
+Frames, status, executed feedback and encoder counters are retained outside
+the repository at
+`Duck2/evidence/20260910T123952-full-route-AEBC-forward-curve-continuation`.
+Physical observations are pending. No automatic retry or logic change followed.
+
+## 2026-09-10 — earlier forward-border tracking and confirmed left-curve gaps
+
+The user reports that the curve-lookahead run advanced, slowed while partly
+turning, then stopped. The two later mask/overlay screenshots were taken after
+the user moved duck2 backward; they are excluded as evidence of the stopped
+position. Use the run's synchronized records instead.
+
+In `20260910T122244-full-route-AEBC-curve-lookahead`, requested output favored a
+right correction initially and then reached 0.03 left / 0.20 right from about
+5 seconds. The lane-loss stop was recorded at 9.75 seconds. No red or route
+completion stop occurred. Sparse requested-wheel status does not establish the
+cause of the perceived slowdown; this run did not record executed feedback or
+encoder counters. It is not evidence for changing motor calibration or power.
+
+The prior lookahead still started at half image height. The continuous-road
+option now traces genuine white-stripe runs from the near road upward to 40%
+image height, pairs them with actual yellow-stripe runs, and rejects excessive
+jumps and broad fragments. Nearby stripe continuity prevents choosing detached
+background white objects as the far border. Two far and two nearer observed
+pairs are required; otherwise the existing nearer lookahead remains available.
+The main lane detector, HSV thresholds and junction/right-pivot geometry retain
+their existing regions and settings. Replay of the latest run requests left
+steering by the 2.22-second saved frame and reaches the left steering limit on
+the 2.95-second scene. Rate limits still govern actual command changes; sparse
+replay cannot simulate the altered physical trajectory.
+
+Missing yellow alone does not select left. With the continuous lookahead option,
+a two-border left curve must first be confirmed for 0.2 seconds. A brief yellow
+gap can then retain that same left request and the measured lane-width estimate
+for at most 0.8 seconds from the last confirmation, provided the white border
+remains consistent. White-only frames cannot renew confirmation. Straight-road
+yellow loss, loss of both borders, jumping white detections, boundary risk,
+red/junction phases, manual Stop and stale camera data retain stopping behavior.
+This is a bounded continuation of observed curvature, not an unmarked left turn.
+
+Status now includes read-only executed-wheel feedback, feedback age, cumulative
+executed/zero sample counts and both encoder counts/ages. These diagnostics
+provide evidence for future slowdown analysis; they do not command motors.
+Fourteen focused lookahead/feedback tests and the native regression suite pass:
+463 tests total, 460 passed and three skipped. Evidence, saved-frame replay and
+pre-change source are outside the repository in
+`Duck2/diagnostics/20260910-far-curve-entry`. No Git operations or physical run
+are part of this change. Physical curve containment and consistent motion
+remain unverified until a fresh Go and the user's observation.
+
+The ARM64 build, 175 focused checks and complete isolated ROS integration suite
+passed (`Duck2/bench-checks/20260910T103408Z-67d8baa1`). The real ROS test confirms
+left output during the allowed white-only gap, zero after its expiry, and
+unchanged camera-loss/red-stop handling. The updated source is deployed with a
+matching onboard hash. A subsequent stopped check confirmed fresh valid camera,
+zero requested and executed output, fresh encoder messages and sole controller
+ownership. The controller is awaiting a route; no movement was started.
+
+## 2026-09-10 — curve-lookahead physical retry
+
+After a fresh Go, the A -> E -> B -> C routine ran with lookahead enabled,
+both boundaries initially visible, and sole controller ownership. It stopped
+early with `Lane lost: boundary gap exceeded`, still following the first route
+edge. The routine sent Stop and verified manual stop and zero requested wheels.
+Evidence is outside the repository at
+`Duck2/evidence/20260910T122244-full-route-AEBC-curve-lookahead`.
+The user observed straight motion followed by slowing, partial turning and
+stopping. This run does not validate curve containment or
+the later junction transitions. No automatic retry or further logic change was
+made; diagnosis will incorporate the user's observations.
+
+## 2026-09-10 — earlier steering at the first left bend
+
+The user reports that `20260910T120355-full-route-AEBC-second-red-fix` went
+straight and stopped before the familiar left curve. Status confirms an early
+lane-loss stop at 5.34 seconds, before any junction transition. Initial commands
+favored the left wheel (right steering); by the time a strong left command
+appeared, the yellow boundary was leaving the view. The white-only fallback
+expired. This was not a red stop, destination stop or detected encoder stall.
+
+The near-weighted whole-mask centroid missed the approaching bend. In addition,
+the ordinary-road heading guard could retain a smaller wrong-sign request when
+matched-row evidence requested the opposite direction. It now corrects that
+sign disagreement within its existing supported-centre gate.
+
+The continuous launcher enables `road_left_lookahead`: two far and at least two
+near yellow/white pairs within the existing image region can request earlier
+left steering. Ordered borders and expanding perspective are required; large
+left-of-lane offsets keep ordinary corrective authority. The contribution ramps
+in with image-space heading, retains stronger existing left requests, and passes
+through the existing steering/rate/wheel limits. It does not invent missing
+borders, extend the white-only timeout, or participate in red approaches,
+junction maneuvers or sharp-right pivots. Ordinary road perception also resumes
+its bright-white reference after the junction phase becomes `complete`.
+
+Saved-frame replay requests left steering at 3.14 seconds, while the previous
+centroid controller still requests right steering. This is a request comparison:
+the saved images are sparse, and replay does not simulate a changed trajectory
+or prove containment. The accepted left-curve recording continues to request
+left steering and then relax it; early steering is stronger, so physical
+revalidation remains necessary. The saved sharp-right phase sequence remains
+approach, pivot, reacquisition and cooldown. Second-red route regressions pass.
+
+Eight new regressions cover recorded entry geometry, wrong-sign guarding,
+straight/right scenes, partial and implausible corridors, junction exclusions,
+real callback evidence transfer, rate limiting, missing-image stopping and
+post-junction calibration. The native suite passes 457 tests (454 passed,
+three skipped). Diagnosis, replay and pre-change source are kept outside the
+repository in `Duck2/diagnostics/20260910-curve-entry`. No movement or Git
+operation is part of this fix. A fresh Go is required for physical validation.
+
+The isolated ARM64 build, all 169 focused checks and the complete ROS integration
+suite passed (`Duck2/bench-checks/20260910T101533Z-9ff748e2`). The new real-ROS
+synthetic-image check confirms left steering with the option enabled and zero
+output for absent markings or stale images. The temporary test container had
+no robot network or hardware access and was removed. The update is deployed to
+the companion container with matching local/onboard source hashes, fresh camera,
+sole controller ownership, manual stop and zero wheel output. No route was started.
+
+## 2026-09-10 — second-red fix retry stopped before a junction
+
+After a fresh Go, the selected A -> E -> B -> C run started with both boundaries
+visible. It ended early with `Lane lost: boundary gap exceeded`, before reaching
+a junction. The routine sent Stop and confirmed manual stop with zero requested
+wheels. Evidence is outside the repository in
+`Duck2/evidence/20260910T120355-full-route-AEBC-second-red-fix`. Physical observations
+confirm straight motion followed by stopping before the curve; this attempt did
+not verify the second-red transition or right turn.
+No automatic retry or steering change followed.
+
+## 2026-09-10 — second red after left exit and sharp-right route transitions
+
+The user clarified the preceding run: the improved initial driving and left
+turn were good, and duck2 stopped at the second red line, where it should turn
+right toward C. Recorded images support this account. The next stop line reached
+the camera's near region at about 27.44 seconds; the final recorded status had
+red detection true and only one remaining boundary pair. The controller had
+failed to advance its route after the left exit and reported corridor loss.
+
+The short-connector next-red transition existed only for right exits. It now
+also applies to an opted-in, visually acquired left exit: a valid near-field
+outgoing corridor must persist for 0.3 seconds with the departure line clear
+before a subsequent red line may commit exactly one route edge. It then latches
+zero, observes the normal dwell, and selects the map's next instruction. Thus
+A -> E -> B -> C stops at B and selects right rather than remaining in the left
+alignment phase. A destination red line completes the route and cannot depart.
+The observed outgoing white border is retained through that stop; the right
+entry can therefore detect its disappearance after the dwell even if it has
+already ended in the camera view. No yellow boundary is required for that
+authorized intersection pivot. Unconfirmed white loss still cannot initiate it.
+
+The separate ordinary-road sharp-right detector remains enabled only while
+following a lane, outside junction phases. It requires a recently complete lane,
+current yellow, confirmed white absence, and right-turn error; brief flicker,
+complete lane loss and intersection instructions do not qualify. Saved successful
+sharp-right footage `20260909T123050Z-sharp-right-restored-020-272d6ab6` replayed
+through the current source progresses through approach, 0.20/0.00 pivot,
+reacquisition and cooldown. A red line during an active road bend now also honors
+the destination index instead of unconditionally setting an intermediate red stop.
+
+Replay of the latest failed run's distinct saved frames and status samples arms
+the left-exit next-red gate at 27.17 seconds and stops at the second line at
+27.44 seconds with route index 2. This is a corrected state transition, not proof
+of the subsequent physical right turn. Seven new regressions cover edge advance,
+dwell, the no-yellow right pivot, destination stops, false/flickering outgoing
+evidence, road bends in routes and separation from junction control. Native
+verification passed 449 tests (446 passed, three skipped), plus syntax, links
+and launcher checks. Evidence and pre-change source are outside the repository
+under `Duck2/diagnostics/20260910-second-red-right`.
+
+The native ARM64 build and all 161 focused checks passed, followed by the full
+isolated ROS integration suite. Its new synthetic-camera sequence confirms a
+left exit, the second red stop, route index 2, and a right pivot without yellow
+or white markings after the dwell. Stop still terminates output. Evidence:
+`Duck2/bench-checks/20260910T095720Z-3d2f5099`; no hardware or robot ROS network
+was accessible to that temporary test container.
+
+Deployment verified matching local/onboard source hashes, both preceding
+alignment fixes and the road sharp-corner detector enabled, fresh camera,
+exclusive controller ownership, and manual stop with zero output. The app is
+connected in `awaiting_route`; no Start or route was sent. The full physical
+A -> E -> B -> C route remains unverified with this update.
+
+Initial driving and left-turn steering settings are preserved. No physical
+movement or Git operation occurred during this fix; a fresh Go is required.
+
+## 2026-09-10 — alignment-fix route retry, observations pending
+
+A fresh Go authorized the unchanged A -> E -> B -> C route with both new
+corrections enabled and a 180-second outer limit. Status recorded the first red
+stop at 17.45 seconds, crossing entry at 19.92 seconds, left turning at 20.75
+seconds and outgoing search at 22.25 seconds. At 25.03 seconds the new visual
+entry latched and requested approximately 0.0830/0.0955 while aligning. At 27.84
+seconds the controller stopped with "Outgoing corridor lost after left arc;
+position must be reset". Final status confirmed manual stop and zero requested
+wheels. Route index remained 1; the route did not complete.
+
+Evidence is outside the repository in
+`Duck2/evidence/20260910T114717-full-route-AEBC-alignment-fix`. Physical observations
+are pending. This confirms that visual handoff activated, but does not establish
+containment or a successful outgoing-lane entry. No automatic retry or logic
+change followed this attempt.
+
+## 2026-09-10 — full-route right drift and missed left-exit diagnosis
+
+The user reported that one wheel crossed the right white boundary before the
+first curve. The bot subsequently recovered, but continued turning left at the
+first intersection past a near-perfect outgoing-lane entry position. This makes
+the full-route attempt a failed containment and junction-exit test, despite the
+previous isolated left-curve acceptance.
+
+The initial right drift was commanded: at 1.39 seconds the recorded pre-flip
+steering was +0.05086 while the matched-row corridor had lateral error +0.01230
+and heading error -0.03093. The whole-mask centroid combines yellow dashes and
+white tape at different depths; its lane error +0.07485 overstated the required
+correction. The existing positive trim also contributes. These are image-space
+errors, not calibrated heading angles. The continuous-only `road_heading_guard`
+limits an excessive centroid correction to the existing matched-row steering
+reference when both borders have a valid, near-field, nearly centred/aligned
+corridor. It preserves the ordinary controller outside that narrow condition,
+including established curves and incomplete boundary evidence. No global trim,
+speed, colour threshold or turn-power retuning was made for this change.
+
+The left search requested 0.03/0.18 repeatedly. It briefly aligned at 26.16
+seconds, but the next heading estimate exceeded the strict completion limit,
+so it resumed the full arc. The new continuous-only `junction_left_visual_latch`
+separates ending the arc from completing the intersection. A stable ordered
+multi-row outgoing corridor switches to visual alignment; near-field centering
+and heading stability are still required before advancing the route. Partial
+rows after entry cannot restart the arc. Complete loss of usable corridor
+evidence stops the maneuver. The original deadlines, freshness checks, Stop
+priority, encoder watchdog and direction-specific turning powers remain active.
+The left visual handoff now preserves the requested wheel ratio while ramping,
+as the right visual handoff already did.
+
+Replay of the recorded status reduces the initial raw steering reference from
+0.05086 to 0.01235, and the second sample from +0.02698 to -0.00590. Combined
+distinct recorded image/status observations latch the outgoing left corridor at
+approximately 25.77 seconds and request countersteering after the recorded
+overshoot, rather than another fixed left arc. Status-only sparse replay enters
+at 26.16 seconds; image-only sparse samples do not confirm the stability window.
+The combined observations are useful diagnostic evidence, not a simulated new
+trajectory or proof of physical road containment. Recordings and replay output
+are outside the repository under `Duck2/diagnostics/20260910-drift-left-exit`.
+
+Validation: 442 native tests completed (439 passed, three platform skips), plus
+source, documentation-link and launcher checks. The new regressions cover the
+road correction in both directions, unchanged curve authority, false corridors,
+partial rows, confirmation flicker, manual Stop, deadlines, route-completion
+stability and wheel-ramp ratios. None of the 19 retained steering samples from
+the accepted left-curve retry changes under the new road guard.
+
+The current source built in a disposable network-disabled ARM64 container on
+duck2. All 154 focused tests and the full ROS integration suite passed, including
+a new real-ROS synthetic-camera case that exits the left arc, countersteers into
+an offset outgoing corridor, and stops after corridor loss. This container had
+no hardware access. Evidence: `Duck2/bench-checks/20260910T094211Z-397c4d81`.
+
+The updated app controller was deployed stopped. Its source SHA-256 matched the
+local source; both new flags were enabled. Live status confirmed a valid camera,
+`awaiting_route`, manual stop and zero requested wheels with sole project wheel
+publisher. Stopped driver preparation also verified zero executed feedback. No
+route or Continue command was sent during deployment.
+
+Physical verification of both corrections is pending a fresh Go. No additional
+movement or Git operation occurred during diagnosis and implementation.
+
+## 2026-09-10 — full A -> E -> B -> C attempt stopped at first junction
+
+After a new Go, the unchanged continuous controller ran the selected route with
+a 180-second outer observation limit. Status reported a red-line stop at 17.94
+seconds, departure into the left crossing at 20.23 seconds, and outgoing-lane
+search at 21.77 seconds. At 31.27 seconds it faulted with "Outgoing lane was not
+reacquired; position must be reset". Route index remained 1. The routine sent
+Stop and verified manual stop with zero requested wheels. This is an incomplete
+route, not a successful arrival at C.
+
+Status and camera evidence are retained outside the repository in
+`Duck2/evidence/20260910T112708-full-route-AEBC`. Physical observations are pending;
+software phases alone do not establish road containment or the actual turn.
+No automatic retry or controller adjustment followed this run.
+
+## 2026-09-10 — continuous left-curve retry accepted
+
+After a fresh Go, ran the corrected continuous app controller from the user's
+position at the start of the familiar left curve, using the selected A -> E -> B
+-> C route and a 15-second observation limit. No further steering or speed
+changes were made. The user reported: "It was perfect."
+
+Evidence `20260910T112401-continuous-left-reference-retry` under local
+`Duck2/evidence` contains 19 timestamped status samples and 19 camera frames.
+All sampled lane estimates reported both boundaries. Commands progressed from
+approximately equal wheels to left-turn requests, including 0.03/0.20, with
+subsequent visual steering corrections. The routine reached its 15-second limit;
+the final controller status confirmed manual stop and zero requested wheels.
+This record contains requested-wheel status, not an independent measurement of
+executed wheel motion or stopping distance.
+
+The user's physical observation accepts this left-curve retry and resolves the
+reported failure to turn at that curve. It does not establish completion of the
+entire A -> E -> B -> C route. No automatic second run or Git operation occurred.
+
+## 2026-09-10 — continuous-route first left curve: white-reference regression
+
+The user reported stopping on the first left curve of the intended A -> E -> B
+-> C route. Windows key SSH and the camera were reachable; deployed controller
+SHA-256 matched local source. The retained Docker log shows a right request of
+approximately 0.133/0.047 at 08:51:56 UTC, followed by absent lane estimates and
+zero requests. Later status was manually stopped (`Run ended by Stop`), with
+white-only boundary-gap loss. That later status does not preserve the original
+stop cause. The stopped frame had no visible yellow divider. There is no full
+synchronized recording of this failed run, so the entire physical trajectory
+cannot be reconstructed.
+
+The accepted September 8 left-curve recording used the original white V=170
+threshold. The continuous launcher inherited V=150 from the later dim right
+bend. On the identical accepted first frame, lowering V to 150 shifted the
+white centroid about 33 pixels right and changed the requested correction's
+direction. On today's user-repositioned curve start, the old lane error was
+0.04097; the brighter reference gives 0.00331. This is a reproduced perception
+calibration regression, not evidence of a connection or route-planning failure.
+
+Added opt-in `road_white_reference_value=170` to continuous mode and its camera
+preview. Ordinary two-boundary tracking uses the brighter mask when sufficient
+ordered white support survives. Dim-only white and one-boundary fallback retain
+the configured V=150 mask. Junction row geometry, red approach, settling and
+active corner/junction phases retain their existing calibration. Speed, gain,
+trim, manoeuvre timing, lane-loss timeout and watchdog limits were not changed.
+Status exposes the reference value and whether it was used on the current frame.
+
+Saved-frame replay checked 415 frames from the accepted left curve, sharp right
+bend and three junction directions. It introduced no additional lane losses,
+no junction-geometry changes and no active-phase lane-error changes. For the
+88-frame left recording, mean absolute disagreement with recorded lane error
+fell from 0.02355 to 0.00442. Ordinary-road estimates also change before other
+manoeuvres; replay does not prove the resulting physical path or a complete
+route. The six new regressions cover bright/dim reference selection, preserved
+junction/corner phases, stopped preview, missing borders and invalid settings.
+The native project check ran 430 tests (427 passed, three skipped), plus source,
+link and launcher checks. The focused Noetic run passed 126 tests. An initial
+focused invocation lacked the desktop module search path and was corrected.
+
+The exact-source ROS integration run on laptop Docker encountered backward clock
+steps and duplicate/out-of-order camera rejection; those failed runs are not
+counted as passes. The timestamp safeguards were retained. A disposable ARM64
+container on duck2 then built the current source and passed 142 focused tests
+and the complete isolated ROS transport suite with synthetic images, network
+disabled and no hardware access. Evidence: `20260910T091332Z-8971ff8b` under
+`Duck2/bench-checks`. The temporary container was removed after verification.
+
+The updated continuous application was deployed without sending Start or a
+route. Its source hash matched the local file; status confirmed `awaiting_route`,
+manual stop, zero requested wheels and sole project publisher. The live stopped
+scene uses reference V=170 and detects both boundaries. Six stopped status samples
+passed (maximum sampled controller frame age 0.2552 seconds), and normal, mask
+and overlay views decoded. These samples do not establish a future timing bound
+or physical curve-following success. The app connection is restored; a fresh Go
+and user observation are required for the physical retry.
+
+Evidence, camera captures and the pre-change deployed source are outside the
+repository under local application data in `Duck2/diagnostics/20260910-left-curve`.
+No physical retry or Git operation was performed during this diagnosis. The
+managed-session onboard route containing only A -> E is expected: the laptop
+holds subsequent validated turn instructions. It is not proof of an incorrect
+destination selection. Physical containment still requires a supervised retry.
+
+## 2026-09-10 — extended checks without the track
+
+Completed the additional checks in [BENCH_CHAT_CHECKS](BENCH_CHAT_CHECKS.md).
+The actual map-only companion passed a multi-junction simulation, destination
+stop, reconnect without resumption and Stop after completion (five checks).
+The production launcher and independent watchdog passed isolated ARM tests for
+encoder stall, competing publisher and controller crash, after a bounded
+initial-registration fix. Evidence: `20260910T081205Z-c266e8bd`.
+
+The first ARM production-watchdog result (`20260910T080443Z-11c527ee`) was a
+false pass caused by shell error handling being disabled by the ROS environment.
+Its detailed log contradicts that result. The runner now restores error checking
+and requires the specific completion marker; later failed attempts are retained
+as failures. The final result includes all three actual fault checks. A one-core
+limit proved insufficient for this production workload; the isolated production
+check uses two cores, with the real stopped application temporarily suspended.
+
+Native regression after the fixes: 424 tests, 421 passed and three skipped.
+Source syntax, documentation links and launcher targets passed. All 77 live
+follower parameters matched the production launcher. Application source hashes
+and runtime dependency versions were checked against the local project.
+
+The updated real controller was prepared again and left manually stopped with
+exclusive ownership. With all synthetic workloads removed, 30 consecutive real
+status/frame samples passed: normal/mask/overlay decoded, timestamps advanced,
+camera remained valid, and wheel requests remained zero. Maximum sampled image
+age was 0.051 seconds; maximum status-request latency was 0.422 seconds. These are
+sampled results, not guarantees of future timing. Evidence:
+`Duck2/release-checks/presentation-stream-soak.json` outside the repository.
+
+No physical movement or Git operations occurred. Lane and turn settings were
+preserved. The track-free preparation is complete; it cannot establish physical
+route containment, stopping distance or detection under tomorrow's course lighting.
+
+## 2026-09-10 — post-reboot presentation preparation
+
+Windows strict-key SSH authenticated without a password prompt. ROS Noetic,
+ARM64 architecture and the camera/wheel message fingerprints match the recorded
+configuration. Hardware interface and ROS containers are healthy. Both encoders,
+front range and IMU published readable samples; simulated ROS time is disabled.
+Robot storage had 44 GB available and the sampled temperature was 36 C.
+Battery charge was not established by these software checks.
+
+The installed dashboard reports unhealthy because its health command invokes
+missing `curl`. An independent HTTP request to its health endpoint returned
+200 / Healthy. This does not block the companion's SSH/ROS services. No installed
+dashboard or ROS software was modified.
+
+Verification performed against current files:
+
+- Native suite: 421 tests, 418 passed and three skipped; source/link/launcher
+  audit passed. Desktop interpreter: 20 focused startup/UI checks passed.
+- Isolated onboard suite: 60 tests passed, plus the ROS transport/integration
+  checks, including stale camera, heartbeat loss, red stop, remote Stop, route
+  progression, managed chat and shutdown. Evidence folder suffix:
+  `20260910T074642Z-07593612`.
+- Actual companion against isolated onboard simulation: all 11 interactive
+  checks passed, including real 30-second deadlines and Stop on app close.
+  Result: `20260910T095312-interactive-ui.json`.
+- Stationary preview: nine normal/mask/overlay images decoded, timestamps
+  advanced and sampled frame ages were below 0.5 s. Metadata:
+  `20260910T074530Z-camera.json`.
+
+Synthetic containers and their relay were cleaned up. Current source was staged
+using `prepare_companion_driving.py`; preview was stopped, normal car-interface
+remains stopped, and the real controller has exclusive wheel ownership. Driver
+stop release occurred only during verified zero-output preparation. Final state:
+`awaiting_route`, manual Stop, fresh camera, no reported fault, and 38 consecutive
+executed-wheel samples at zero. The companion was opened and verified connected
+with a rendered real camera image, no selected app route and placement unconfirmed.
+The controller's displayed default route is not an authorized presentation route.
+
+The real camera shows a tabletop. Its boundary-gap/lane-loss diagnostic is
+expected here; it is not evidence of track readiness. Starting-lane/destination
+selection, current-lighting inspection on the track, battery confirmation and
+observed physical route performance remain pending. No physical run, Start,
+Continue, steering retuning or Git operation occurred during this preparation.
+Evidence and the temporary app-opening helper are outside the repository under
+local application data in `Duck2/bench-checks` and `Duck2/release-checks`.
+
 ## 2026-09-10 — cleanup and startup audit
 
 Current native suite: 421 tests, 418 passed and three dependency/platform skips.
@@ -1975,3 +2605,430 @@ destination). It records `reacquired_at_next_red` with alignment
 `contained_not_settled`. Red seen before that stable corridor still cannot
 advance the route. Tests cover final and intermediate destinations and prevent
 one persistent red image from advancing twice.
+
+## 2026-09-10 — Immediate live-chat pause and straight-only pause scenario
+
+- User requested an immediate three-second chat pause on the straight after the
+  A -> E curve, followed by stopping and ending at the next red line.
+- Existing local chat turn queue and slow/normal/fast profiles are retained.
+  Pause now publishes zero in the command callback, without waiting for straight
+  classification. Its monotonic countdown preserves the current turn and queue;
+  paused time is excluded from maneuver timing. Camera/heartbeat/stall watchdogs
+  remain active. Stop/fault cancels resume.
+- Added the same companion's `--pause-check` option and
+  `laptop/Start-Duck2-PauseCheck.cmd`. It prefills but never sends the chat text,
+  uses A -> E, and requires the user's Start. The controller's
+  `stop_at_next_red` flag ends the check at that line and rejects late departure.
+- 75 focused native checks passed; source, documentation links and launchers
+  checked. Focused HTTP/ROS checks in a local network-disabled container passed:
+  three profiles; immediate zero without straight classification; three-second
+  pause measured at 3.057 seconds in synthetic wheel requests; healthy resume;
+  next-red completion with zero output and rejected late Resume.
+- The broader isolated ROS script stopped earlier at its sharp-right-wheel
+  assertion (test_ros_transport.py, line 271), outside the changed chat path.
+  No turn/curve launcher settings were changed to address that separate check.
+- Current source hashes match the staged robot code. Preparation verified
+  awaiting_route, manual stop, zero requested/executed output, a fresh camera
+  and exclusive lane-follower ownership. No physical run was initiated here.
+- Earlier source is preserved in the local Duck2 backups directory. Logs and
+  preparation status are in the local diagnostics/immediate-chat-pause-20260910
+  directory. No Git operations. User-observed pause/resume/red-stop results
+  remain pending. Automatic review blocked opening the app from this task;
+  the prepared launcher can be opened by the user.
+
+## 2026-09-10 — Successful pause report; live junction override preparation
+
+- User reported the A -> E three-second pause test successful. This is physical
+  confirmation from the user, in addition to the earlier isolated ROS results.
+- Prepared a new companion scenario on the straight after the A -> E curve,
+  selecting A -> E -> B -> C (initial future turns: left, right).
+- User-entered "go straight at the next junction" replaces both planned turns
+  with one straight instruction. Verified map transition: A -> E to E -> C.
+  At C the queue is empty and the robot holds for a direction. "Go left"
+  selects the legal exit C -> B; no message is sent automatically by setup.
+- Red-line instruction waiting is now 60 seconds from arrival. Invalid input
+  and ordinary status polling do not restart the wait. Its expiry ends the run;
+  a late instruction cannot restart it. Indefinite chat pauses retain their
+  separate 30-second limit; requested pause durations and driving profiles are
+  unchanged.
+- Added laptop/Start-Duck2-JunctionChatCheck.cmd (--junction-chat-check). This
+  opens the existing companion, sets the route, shows live camera/chat and
+  prefills an unsent first message. Start remains a user action. The app checks
+  that the controller advertises the 60-second wait before starting this mode.
+- 77 focused offline checks passed, including the actual controller and laptop
+  queue for the exact A/E/C sequence, waiting past 30 seconds, accepting left
+  at 55 seconds and rejecting departure after 60 seconds. Source, doc links
+  and Windows launcher checks also passed. No movement logic was retuned.
+- Updated source was prepared on duck2; controller remained awaiting_route,
+  manually stopped with zero output and current camera frames. App reopened
+  for the user. No physical run or chat instruction was started by preparation.
+  Physical straight-at-E and commanded-left-at-C observations remain pending.
+- Recovery source is saved outside the repository in the local Duck2 backups
+  directory. No Git operations occurred.
+
+### Companion presentation cleanup after the successful pause check
+
+Removed both scenario launchers' prefilled chat input and scripted test narration.
+The junction scenario displays the normal app title, selected route and normal
+live status. The user types and sends every message. Five existing native UI
+checks passed. Confirmed unchanged parser recognition for "stop for 3 seconds",
+"go straight at the next turn", "left", and "go left". "3s" and misspelled
+commands are not corrected automatically. The parser remains a fixed grammar
+with validated route/queue context. No language-model integration, steering
+changes, robot deployment or physical movement was introduced by this UI edit.
+The old app was closed normally (Stop) and the revised companion reopened.
+
+### 2026-09-10: E -> C straight-junction exit handoff
+
+The user reported stopping at the E -> C curve during a live-chat route. The saved controller status recorded `Outgoing lane was not reacquired; position must be reset`, route A -> E -> C at index 1, active straight crossing, and zero requested/executed wheels. This was a junction reacquisition timeout, not the ordinary curve follower stopping. The user had subsequently pressed Stop, so the top-level Stop reason did not explain the original fault.
+
+Replaying a stationary image captured during diagnosis reproduced rejection by the five fixed row samples: three ordered pairs were visible but none at the prescribed near rows. Denser sampling found 15 ordered row pairs reaching 70% of the analysed region, with small lateral/heading errors. The image is current stationary evidence, not a complete recording of the failed movement.
+
+For app-controlled straight exits only, a fallback now samples additional rows and requires at least six pairs across a 54% depth span, real support in the lower third, plausible ordering/continuity, and the existing alignment/stability thresholds. Distant fragments, misalignment and unmarked images still cannot complete a crossing. After successful straight reacquisition, app routes release junction steering to ordinary lane following immediately; a separate straight-only settling phase no longer owns an ensuing road curve. Finite diagnostic routines retain their previous settling behaviour.
+
+The continuous launcher, colour thresholds, ordinary curve steering, sharp-corner profiles, red-stop detection, seven-second chat pause support and 60-second red-line wait are unchanged. The crossing deadline and independent stopping safeguards remain active.
+
+Validation: 180 focused offline tests passed (including seven new exit/handoff regressions and the camera/client/UI checks); project source/link/launcher checks passed. The first deployment exposed a read-only camera-preview compatibility issue; the scoped detector gate now handles that preview object and its tests pass. Captured-image replay completed the handoff exactly once to E -> C with normal following active. A local backup and diagnostic image/status/logs are outside the repository. No physical validation run and no Git operation occurred during this fix; road performance remains for the user's next app-started run.
+
+### 2026-09-10: rightward departure after E; preserve visual steering
+
+The user reported slow/hesitant approach, rightward departure after entering the outgoing lane, and leaving the road before reaching the curve. They then picked up/repositioned duck2; subsequent stationary geometry is excluded as evidence of its driving trajectory. Saved status again records a straight-crossing reacquisition fault at route index 1, rather than a completed handoff to road following. Sparse wheel logs show mostly near-equal requested power while the lane estimate was absent. There are no synchronized images of this failed run, so they do not establish the full cause of its physical drift.
+
+Code review found that the previous extra-row acceptance fallback also replaced the geometry used for visual steering. That unintended coupling is removed: extra-row geometry is now separate acceptance evidence, and the previous five-row visual steering calculation remains intact. An app-controlled straight exit can also complete once the normal road follower's center estimate is acceptable in a stable, ordered near-field corridor, with acceptable heading and bounded lateral geometry. It need not first force the different junction-fit target. Left/right maneuvers and ordinary curve tuning are unchanged. No new stop condition was added, and existing stopping checks/deadlines were not changed.
+
+Verification: 169 focused offline tests passed, including the exit handoff, differing targets, misalignment rejection, camera preview, live pause/turn delivery and existing junction safety checks. Replay of all 87 available images from the accepted straight-crossing recording `20260909T172430Z-junction-straight-restored-baseline-b7dbc3de` produced exactly the same lane errors, steering geometry and visual wheel requests as the source before the E -> C handoff changes. This is an offline regression result, not a physical revalidation. Compact junction-state/geometry diagnostics are logged every five processed crossing frames for the next user-started run. No robot movement or Git operations were performed for this diagnosis.
+
+### 2026-09-10: straight instruction persisted into the E -> C curve
+
+The latest user observation was successful pause/red-line departure followed by weak left curving, crossing the white border, and stopping. The recorded crossing trace confirms that ordinary road following never took ownership: route index stayed 1 with active turn straight until the reacquisition deadline. The straight-fit controller requested rightward corrections as the outgoing road bent left. A stable curved corridor exceeded the straight-heading acceptance bound, which is unsuitable for identifying a road that already curves.
+
+For app-controlled straight crossings, stable ordered outgoing borders at multiple image heights now latch normal road tracking before final near-field route confirmation. The unchanged ordinary detector/reference and wheel mixer then own steering; losing a near yellow dash does not resume the straight crossing profile. The lane need not be straight or perfectly centred first. Near-field paired support remains necessary before the route index advances once to E -> C, clears active turn, and clears the crossing deadline. A new route or junction resets the latch. Initial unmarked crossing, left/right junction profiles, ordinary curve gains, chat pause duration and 60-second direction wait are unchanged. No additional stopping condition was introduced.
+
+Validation: 173 focused offline tests passed. Replay of the latest recorded junction geometry/status sequence reproduced the old stuck-straight timeout and, with the revision, entered road_tracking 3.70 s into the recorded search sequence and following at route index 2 at 6.23 s. These are replayed state transitions, not predicted physical timings or proof of road containment. Tests cover early visual steering on a curve, later near-field confirmation despite curved geometry, partial dashes, false corridors, scope exclusions, route completion, live pause/turn delivery and existing stopping checks. Backup, original status/logs and replay results remain outside the repository. No physical run or Git operations occurred during implementation.
+
+
+## 2026-09-10 — Fresh live-chat junction scenario (prepared, not physically run)
+
+The prior run failed outgoing-lane acceptance at E: sampled traces still said
+`searching`, with two distant boundary pairs and no near support; the nine-second
+search timer expired. The user also observed hesitation after pausing. Recorded
+requests included 0.03/0.175 followed by approximately 0.09/0.09. Those requests
+show steering and low baseline power but do not establish the physical cause of
+the hesitation. No new wheel-power or steering calibration was inferred.
+
+The new scenario opens the selected A → E → B → C route with an empty message
+box. The user starts on A → E after its curve, sends `stop for 7s`, replaces the
+remaining turn queue with `go straight at the next junction`, follows E → C,
+waits at C for up to 60 seconds, then sends `left`. It follows C → B and ends
+stopped at B's red line. Final-stop policy is stored on the robot, rather than
+requiring a finishing Stop message from the laptop. The existing junction-chat
+launcher now uses `--junction-chat-scenario`; the old flag remains an alias.
+
+Straight exits retain densely sampled, actually observed corridor evidence
+through yellow dash gaps without relabeling mid-depth evidence as near-field
+alignment. An ordered corridor across multiple depths, reaching at least row
+0.54 of the analysis region and stable for 0.3 seconds, commits road steering
+and route progress together. The E search timer is cleared at that transition.
+No extra straight-alignment phase remains attached to the subsequent left
+curve. Distant fragments, reversed boundaries, narrow patches and flickering
+candidates still fail acceptance; unknown exits retain the crossing deadlines.
+
+New session initialization clears prior pause, geometry-continuity, encoder-
+balancing, crossing and reacquisition state. Each app Start uses a new run ID.
+`stop for 7s` now accepts the same seven-second request as `stop for 7 seconds`.
+No chatbot message or route Start is sent by opening the scenario launcher.
+
+Verification completed:
+
+- 161 focused native tests passed with socket creation blocked, covering the
+  exact scenario through final B stop, existing navigation/safety regressions,
+  pause/Stop priority, delayed directions, queue transactions and UI behavior.
+- The subsequently added native UI scenario check passed with the other five
+  UI checks: blank text, no automatic Start, initial route, final directed red
+  line and distinct new session IDs. Total distinct focused checks: 162.
+- Real HTTP/ROS verification passed in a disposable Docker container with
+  `--network none`: all three speed profiles; immediate zero; `stop for 7s`
+  measured 7.080 seconds until resumed wheel feedback; next-red completion;
+  configured C → B final stop; and rejection of a late resume.
+- Project validation passed for 75 Python sources, documentation links and
+  Windows launcher targets.
+- AST comparison against the pre-change local backup confirmed unchanged
+  wheel mixing, acceleration ramp, approach steering, left-junction visual
+  control, junction profiles, planned turn commands and sharp-corner control.
+  The continuous launcher also matched the backup byte-for-byte.
+
+The verified sources were deployed to the existing temporary driving container.
+Read-only verification confirmed matching source hashes, `awaiting_route`,
+manual stop, fresh camera/status, one wheel publisher and fresh executed-zero
+feedback. No physical run or Git operation occurred. The previous app window
+closed normally. Automatic approval review blocked the combined app-opening
+command, so the updated launcher must be opened manually. A newly supervised
+physical run is still required to establish road containment and curve behavior.
+
+
+## 2026-09-10 — Stronger ordinary left-road response
+
+The user reported improvement on E → C: the robot began following the left
+curve and remained within the borders, but needed a stronger turn. The latest
+saved log already reached approximately 0.03/0.15, then relaxed toward equal
+wheel commands as the centroid error diminished. This observation does not
+establish a new physical curvature calibration.
+
+Added opt-in `road_left_response_scale`, default 1.0, set to 1.30 only in the
+continuous launcher. It smoothly increases negative-error lane-following
+feedback between the existing 0.05 deadband and 0.09 full-gain threshold. It
+requires both boundaries and ordinary following with no active junction,
+red approach or sharp-corner maneuver. Errors within the deadband, right
+corrections, single-boundary fallback and all junction profiles are unchanged.
+The existing 0.03 active-wheel floor, 0.20 wheel cap, 0.11 steering cap,
+acceleration limiting and colour thresholds remain unchanged. The multiplier
+is controller response, not a measured percentage increase in physical turning.
+
+At a synthetic steady lane error of -0.08, the old wheel request was about
+0.0425/0.1375 and the revised request is about 0.030/0.1514, reaching the
+previously successful left-curve command range sooner. Straightening remains
+camera-controlled; there is no fixed turn latch or fixed-duration left curve.
+
+48 focused offline checks passed with networking blocked, including scope,
+wheel caps, lane-loss zero, straight handoff, complete chat scenario and
+steering-transition regressions. Project validation passed for 76 Python
+sources, documentation links and Windows launcher targets. The pre-change
+node and launcher are saved outside Git in `before-adjustment.zip` in this
+run's diagnostics folder. No physical test or Git operation occurred.
+
+
+## 2026-09-10 — Undo broad left response; stronger turning only on a detected curve
+
+The user reported that the preceding 1.30 left-response change oscillated on
+ordinary road and crossed both boundaries. Treat that attempt as failed. The
+entire `road_left_response_scale` change was removed by restoring the node and
+continuous launcher from the pre-adjustment snapshot before this replacement.
+The earlier section describes a superseded implementation, not the current one.
+
+The new opt-in `road_left_curve_boost` is enabled only in continuous app mode.
+It requires matched, correctly ordered yellow/white observations across shared
+near/far image depths and leftward curvature in both borders. A displaced or
+slanted straight is insufficient. The fitted bows are image-space evidence,
+not calibrated turning radii or distances. Confirmation lasts 0.3 seconds.
+When currently confirmed, the target is left 0.03 / right 0.20, reached through
+the existing steering/output slew limits. The boost clears on loss of curve
+evidence, a needed rightward correction, stale camera data, missing borders,
+red approach, pause/Stop, or junction/sharp-corner control. Normal road gains,
+trim, colour thresholds, junction maneuvers and chat scenario remain unchanged.
+The old experimental road lookahead remains disabled.
+
+Focused offline checks cover curved images, dashed stripes, offset/yawed
+straights, right curves, missing/partial markings, curve-to-straight reset,
+requested wheel values, camera/Stop/pause gates, callback evidence transfer,
+the E outgoing-lane handoff, fresh chat scenario and steering transitions.
+Saved real images were replayed outside the repository: the accepted left-curve
+sequence confirms the curve before straightening; the accepted straight-crossing
+sequence produces no curve candidates. Replay is not a physical validation of
+the stronger pair on this route. The user must evaluate containment on the next
+app-started run. No physical run or Git operation is part of this change.
+
+Verification result: 52 focused checks passed with robot networking blocked.
+Project checks passed for 76 Python sources and documentation/launcher links.
+The 88-frame accepted curve replay classified frames 0-26 as curve candidates
+and released the boost classification on the exit; the 87-frame accepted
+straight-crossing replay had zero candidates. Deployed source hash matched the
+local file; the controller reported awaiting_route, manual stop, a fresh camera,
+one wheel publisher and fresh executed zero. The app was refreshed without
+starting a route or sending any chat message. Physical validation is pending.
+
+
+## 2026-09-10 — Camera viewer connection refresh
+
+After the curve-only deployment, Windows SSH and command HTTP were reachable,
+but the read-only camera gateway raised AttributeError because LanePreview
+does not initialize the new controller-only road_left_curve_boost option.
+The shared detector now defaults an absent option to false for preview use.
+This one-line compatibility fix does not change the configured steering.
+29 existing camera/detector and curve regressions passed offline. The temporary
+app service is refreshed while stopped; no route or chat command is sent.
+
+
+## 2026-09-10 — Straight-crossing distant exit visibility
+
+User observation: after the E red stop, duck2 drifted right and left the road.
+The saved run 774b0e2c-8dbe-40e8-9b48-54ac191da7cc stayed in authorized straight
+searching, never accepted the outgoing lane, and stopped on its reacquisition
+deadline. Recorded crossing commands were approximately 0.15/0.15 with small
+encoder corrections. The curve-only boost was not eligible during this phase.
+The user moved the robot after stopping, so subsequent images do not document
+its failed endpoint or prove its physical heading during that run.
+
+After the user positioned it at E for stationary inspection, the camera showed
+outgoing yellow/white boundaries around image rows 147-174. The regular lane
+ROI begins at row 240 in this 480-row image. It therefore could not use the
+visible distant corridor to correct the crossing. This is a demonstrated
+perception blind spot; it does not prove every cause of physical drift.
+
+Added distant-corridor aiming only for authorized app straight crossings, after
+the entry interval and while reacquiring. It requires ordered boundaries,
+multiple shared rows, widening toward the camera, coherent line fits and 0.2 s
+of fresh observations. A small deadband suppresses dash jitter; steering is
+limited to +/-0.025 around the existing crossing speed. It aims toward the
+optical centre without applying ordinary-road trim. Existing usable lower-ROI
+lane steering takes priority. Distant evidence alone cannot advance route
+progress or bypass the existing near-lane handoff, deadline or stop gates.
+No ordinary-road/curve tuning, left/right intersection profile, red threshold,
+wheel cap, timing, or chatbot command behavior changed.
+
+The stationary image produced ten matched forward row pairs with median centre
+321.125 in a 640-pixel image, requesting equal wheels after the deadband.
+79 offline checks passed with networking blocked, covering forward detection,
+steering direction/caps, missing/reversed/transverse markings, freshness,
+near-lane takeover, Stop output, camera preview, curve scope, straight handoff,
+chat scenario and steering transitions. Project validation passed for 77 Python
+sources and documentation/launcher links. Source backup and camera evidence
+remain outside Git. No physical run or Git operation occurred. Road containment
+with the correction remains unverified until a user-started app run.
+
+
+## 2026-09-10 — Camera freshness stop during aligned straight crossing
+
+User observation: straight crossing stayed aligned but stopped before entering
+the outgoing lane. The app screenshot and robot fault agree: Camera lost during
+junction; position must be reset. Run 7391915f-65a6-469f-8135-b01c54c7e2d3 remained
+in straight reacquisition; the stop was not another red-line stop. Red detection
+bounds and thresholds were therefore left unchanged.
+
+Both image processes were using the four-worker OpenCV default; the controller
+and preview each consumed roughly one CPU core in the sampled process report.
+A stationary benchmark on duck2, with ROS transport mocked and sockets blocked,
+measured full perception at median/95th-percentile/maximum 89.76/129.55/159.31 ms
+with four workers, versus 83.90/101.07/130.51 ms with one. These short samples
+support reducing competing processing, but do not prove the cause of every
+possible future camera gap.
+
+Both application image entry points now select one OpenCV worker. The read-only
+viewer renders at most 10 fps, skipping surplus callbacks before decoding;
+skipped frames never renew captured/received timestamps. Controller camera
+processing remains unrestricted by that preview cap. Camera freshness stays
+0.5 seconds and real gaps still fault and stop. Persistent timeout diagnostics
+record frame age, receive age and in-flight/previous processing duration so a
+future gap can be distinguished from a rendering delay. Steering, crossing,
+red-stop logic and maneuver timing match the pre-change source.
+
+39 focused offline checks passed for preview throttling, image parity, true
+camera loss, timeout diagnostics, forward-exit scope, left-curve scope, straight
+handoff and the live-chat scenario. Project validation passed for 77 Python
+sources and documentation/launcher links. The source backup and benchmark data
+are outside the repository. No physical run or Git operation occurred.
+
+Stopped live verification after deployment: both source hashes matched; both
+image processes reported one OpenCV worker and preview reported 10 fps. Normal,
+mask and overlay returned fresh frames. Across 30 stationary status samples,
+maximum controller age was 0.305 s, viewer age 0.115 s and processing duration
+0.154 s, with no recorded timeout. This is stationary timing evidence, not a
+completed physical crossing. The app was reopened and left awaiting Start.
+
+
+## 2026-09-10 — Latest app attempt interrupted by depleted battery
+
+Status: INCOMPLETE / NOT VALIDATED — do not mark successful.
+
+The user reported that the latest attempt seemed good, but the battery ran out.
+This is a provisional visual observation only. Route completion, outgoing-lane
+entry and normal commanded stopping are not established for this attempt.
+Retain the current scenario and camera-performance settings for a later retry;
+no steering, detection, timing or app behavior changes were requested here.
+Further testing is paused pending the user's next task. No robot access, physical
+test or Git operation was performed while saving this record.
+
+
+## Documentation-refresh verification — 2026-09-10
+
+- The 77-source syntax, relative documentation-link and Windows launcher-target
+  audit passed.
+- 63 focused native tests passed across `test_live_chat`, `test_live_navigation`
+  and `test_route_planner`; no hardware or live ROS master was used.
+- The report compiled to four pages. Every rendered page was visually reviewed;
+  its PDF text and LaTeX source passed the requested topic-exclusion check.
+- Runtime Python, controller/ROS launchers, configuration, dependencies, tests
+  and licence were byte-compared against the recovery snapshot and unchanged.
+- Three obsolete shortcuts were the only removed files. The latest physical
+  attempt is still incomplete; no physical test, robot change or Git operation
+  was performed during this documentation refresh.
+
+
+## 2026-09-10 — Live-chat curve yellow-gap audit
+
+Reproduced loss of confirmed curve authority during a short missing-yellow gap,
+and a V=170 to V=150 white-reference switch that changed lane-error sign. Added
+a maximum 0.8-second continuation requiring recently confirmed complete curve
+evidence and a matching, still-curved white trace. It cannot recognize a new
+turn or renew itself using white alone. Straight/junction settings and red
+detection are unchanged. Full-boundary saved-frame outputs are identical.
+
+516 native tests passed, three skipped; 137 focused tests and actual HTTP/ROS
+chat checks passed in an isolated Noetic container. The seven-second synthetic
+pause measured 7.081 seconds. The earlier battery-interrupted run remains
+incomplete; no physical run is claimed. See [lane review](LIVE_CHAT_LANE_REVIEW.md)
+for reproduction, safety coverage, replay and deferred physical checks.
+
+
+### Stopped deployment verification
+
+The robot was reachable after reboot. The current source was staged with the
+standard preparation tool; its SHA-256 matched the local node. Exclusive
+project ownership, manual stop, awaiting_route and executed zero were verified.
+Across 18 later stopped-state samples, maximum controller frame age was 0.256 s;
+nine normal/mask/overlay samples decoded with advancing timestamps and maximum
+preview age 0.131 s. No new timeout occurred in that window. An earlier brief
+0.515-second timeout remained in the diagnostic history; camera reliability
+through a moving route is not established by these samples.
+
+The same junction-chat scenario was reopened. No route, Continue, Start or
+chat message was sent. Physical validation still requires the user's placement
+and observation. The installed ROS runtime and calibration were preserved.
+
+## 2026-09-10 — yellow-gap and outgoing-lane follow-up
+
+User observation: rightward drift soon after entering the outgoing lane, then
+robot repositioned. Not accepted as a successful run. The retained log remained
+in straight-junction reacquisition until manual Stop; its final current image
+is not failure evidence after repositioning.
+
+Fixed a reproduced mismatch between the mixed-depth lane centroid and confirmed
+left-curve geometry. Kept the established 0.03/0.20 curve command and 0.8-second
+maximum confirmed yellow gap, with near-corridor displacement protection.
+Separately corrected fresh-camera confirmation resets and far-end fragment
+rejection in distant straight-exit aiming. Steering caps, red detection, fresh
+camera limits, Stop and route-completion requirements remain unchanged.
+
+Validation: 523 native tests passed, three platform skips; 144 isolated Noetic
+focused tests plus real synthetic HTTP/ROS chat/pause/red-stop checks passed.
+The seven-second synthetic pause measured 7.093 s. Saved accepted curve/straight
+frame replay retained all prior wheel requests. Recorded-coordinate challenges
+verify the outgoing aiming correction, not physical lane containment.
+
+See [the detailed lane review](LIVE_CHAT_LANE_REVIEW.md) for evidence and limits.
+No physical movement or Git operation was performed. Track validation is pending.
+
+## 2026-09-10 — additive right-white protection
+
+Failed run: the user reports a rightward heading already at the red stop and
+rightward departure, then repositioned duck2. The log records equal approach
+commands when paired guidance was unusable, followed by near-equal crossing
+commands without a usable outgoing yellow/white pair. Do not infer the old pose
+from the current camera view.
+
+Added an opt-in white-boundary guard to the existing companion controller's final
+wheel request. It protects the latched approach and straight crossing/search
+when a coherent near right stripe intrudes toward the forward path, even if
+yellow is absent. Correction is bounded at 0.03, with existing wheel limits;
+normal white at the side and an aligned paired corridor do not receive a trim.
+Ordinary curves and deliberate left/right junction maneuvers are unchanged.
+
+Validation: the full native run passed 543 cases with three platform skips
+(540 passes); the final 19-case guard module also passed, including two added
+paired-corridor cases. The isolated pinned Noetic run passed 163 focused cases
+and real synthetic HTTP/ROS chat checks; seven-second pause measured 7.096 s.
+Replaying 88 accepted curve frames and 87 straight frames as ordinary road
+following retained all previous errors and wheel requests. These are software
+checks, not evidence of successful physical correction.
+
+See [the lane review](LIVE_CHAT_LANE_REVIEW.md) for the exact scope and limits.
+No motion or Git operations were performed. A supervised app retry is pending.

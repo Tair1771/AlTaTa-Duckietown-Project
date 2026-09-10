@@ -3,11 +3,13 @@
 COMMAND_THRESHOLD = 0.07
 FEEDBACK_TIMEOUT = 0.5
 STALL_TIMEOUT = 0.75
+STARTUP_TIMEOUT = 15.0
 
 
 class SafetyState:
     def __init__(self, started_at):
         self.started_at = started_at
+        self.owner_seen = False
         self.status = None
         self.status_at = None
         self.request = (0.0, 0.0)
@@ -43,6 +45,15 @@ class SafetyState:
             self.motion[side] = (now, ticks)
 
     def fault(self, now, wheel_publishers):
+        if wheel_publishers == ["/lane_follower_node"]:
+            self.owner_seen = True
+        # ROS/DTROS startup can take several seconds on the ARM board. Allow
+        # only the initial absence of a publisher while all observed output is
+        # zero. This cannot mask a publisher disappearing after registration.
+        if (not self.owner_seen and not wheel_publishers
+                and self.request == (0.0, 0.0) and self.executed == (0.0, 0.0)
+                and now - self.started_at < STARTUP_TIMEOUT):
+            return None
         if now - self.started_at < 2.0:
             return None
         if wheel_publishers != ["/lane_follower_node"]:

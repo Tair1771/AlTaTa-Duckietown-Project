@@ -38,6 +38,7 @@ def status(session):
             "current_approach": session.approach, "junction_instruction_ready": True,
             "wheel_publishers": ["/duck2/lane_follower_node"],
             "live_session": {"version": 1, "active": True, "run_id": session.run_id,
+                             "pause_mode": "immediate",
                              "profile": "normal", "instruction_id": None}}
 
 
@@ -48,6 +49,11 @@ class LiveLanguageTests(unittest.TestCase):
             "Left after that one": Intent("turns", ("left",), True),
             "Next left then right": Intent("turns", ("left", "right")),
             "Can you go straight at the next intersection?": Intent("turns", ("straight",)),
+            "I want it to go straight on the next junction": Intent("turns", ("straight",)),
+            "I want the bot to go left": Intent("turns", ("left",)),
+            "stop for 7s": Intent("pause", 7),
+            "stop for 7 seconds": Intent("pause", 7),
+            "wait 1.5s": Intent("pause", 1.5),
             "stop": Intent("pause"), "pause for five seconds": Intent("pause", 5),
             "please wait 3.5 seconds": Intent("pause", 3.5),
             "stop the bot": Intent("pause"), "stop the run": Intent("end"),
@@ -63,12 +69,30 @@ class LiveLanguageTests(unittest.TestCase):
     def test_ambiguous_unsupported_or_negated_cannot_move(self):
         for text in ("don't stop", "do not quit", "reverse", "turn right if possible",
                      "what if we turn left", "speed 0.8", "right or left", "drive to the duck",
+                     "stop for 7s extra", "stop for 7ms", "stop for -7s",
                      "pause for 0 seconds", "pause for 9999 seconds", "resume then right"):
             with self.subTest(text=text):
                 self.assertEqual(interpret_live(text).action, "clarify")
 
 
 class LiveQueueTests(unittest.TestCase):
+    def test_terminal_status_preserves_only_verified_last_turn(self):
+        for reported_turn in ("right", "left"):
+            with self.subTest(reported_turn=reported_turn):
+                queue = LiveChatSession("A->D", ["right"])
+                value = status(queue)
+                transport = Transport(value)
+                queue.service(transport, value)
+                value.update(state="route_complete", route_index=2, current_approach="D->B",
+                             junction_last_result={"outcome": "reacquired_at_next_red",
+                                                   "turn": reported_turn, "route_index": 2})
+                value["live_session"].update(active=False, instruction_id=queue.inflight["id"],
+                                             end_reason="No junction instruction within 60 seconds of the red stop")
+                queue.observe(value)
+                self.assertFalse(queue.active)
+                self.assertEqual(queue.approach, "D->B" if reported_turn == "right" else "A->D")
+                self.assertEqual(queue.queue, [])
+
     def test_map_validation_all_directed_approaches(self):
         for approach in RED_LINE_APPROACHES:
             previous, junction = parse_approach(approach)
@@ -188,6 +212,32 @@ class LiveQueueTests(unittest.TestCase):
         self.assertTrue(transport.calls[0][1]["managed_session"])
         self.assertEqual(transport.calls[1][0], "continue")
 
+    def test_start_rejects_old_deferred_pause_controller(self):
+        planner = OfflineCompanionSession()
+        planner.select_start("A->D")
+        planner.select_destination("B->C")
+        queue = LiveChatSession(planner.plan.start_approach, planner.plan.turns)
+        value = status(queue)
+        del value["live_session"]["pause_mode"]
+        transport = Transport(value)
+        with self.assertRaisesRegex(RuntimeError, "immediate-pause"):
+            start_route(transport, planner.plan, live_session=queue)
+        self.assertFalse(transport.calls)
+
+    def test_pause_check_payload_and_no_turns(self):
+        planner = OfflineCompanionSession()
+        planner.select_start("A->E")
+        planner.select_destination("A->E")
+        queue = LiveChatSession("A->E", stop_at_next_red=True)
+        value = status(queue)
+        value["live_session"]["supports_pause_check"] = True
+        transport = Transport(value)
+        start_route(transport, planner.plan, live_session=queue)
+        self.assertTrue(transport.calls[0][1]["stop_at_next_red"])
+        self.assertEqual(transport.calls[0][1]["route"], ["A", "E"])
+        with self.assertRaisesRegex(ValueError, "Pause check ends"):
+            queue.replace_turns(["right"])
+
 
 class LiveClockTests(unittest.TestCase):
     def new(self):
@@ -197,36 +247,32 @@ class LiveClockTests(unittest.TestCase):
         self.assertEqual(len(PROFILES), 3)
         return state
 
-    def test_pause_defers_through_turn_and_curve_timer_begins_on_straight(self):
-        state = self.new()
-        state.request_pause(5)
-        for t, phase in ((0, "crossing"), (4, "reacquiring"), (8, "following")):
-            state.observe_straight(t, False)
-            state.tick(t, phase, 1, None, True)
-            self.assertIsNone(state.paused_at)
-        state.observe_straight(10, True)
-        state.observe_straight(10.5, True)
-        state.tick(10.5, "following", 2, None, True)
-        self.assertEqual(state.paused_at, 10.5)
-        state.tick(15.4, "following", 2, None, True)
-        self.assertIsNotNone(state.paused_at)
-        state.tick(15.5, "following", 2, None, True)
-        self.assertIsNone(state.paused_at)
-        self.assertTrue(state.active)
+    def test_pause_immediate_in_every_phase_without_straight_classification(self):
+        for phase in ("following", "crossing", "reacquiring", "red_stop"):
+            with self.subTest(phase=phase):
+                state = self.new()
+                state.request_pause(5, now=10)
+                self.assertEqual(state.paused_at, 10)
+                self.assertFalse(state.pause_pending)
+                state.tick(14.9, phase, 1, 10, True)
+                self.assertIsNotNone(state.paused_at)
+                state.tick(15, phase, 1, 10, True)
+                self.assertIsNone(state.paused_at)
+                self.assertTrue(state.active)
 
     def test_red_timeout_uses_arrival_even_if_first_tick_late(self):
         state = self.new()
         state.tick(20, "red_stop", 1, 10, True)
-        self.assertEqual(state.snapshot(20)["wait_remaining"], 20)
-        state.tick(39.9, "red_stop", 1, 10, True)
+        self.assertEqual(state.snapshot(20)["wait_remaining"], 50)
+        state.tick(69.9, "red_stop", 1, 10, True)
         self.assertTrue(state.active)
-        state.tick(40, "red_stop", 1, 10, True)
+        state.tick(70, "red_stop", 1, 10, True)
         self.assertFalse(state.active)
 
     def test_indefinite_timeout_and_continue(self):
         for resume in (False, True):
             state = self.new()
-            state.request_pause()
+            state.request_pause(now=1)
             state.straight = True
             state.tick(1, "following", 1, None, True)
             if resume:
@@ -236,11 +282,27 @@ class LiveClockTests(unittest.TestCase):
 
     def test_unhealthy_timed_resume_ends_instead(self):
         state = self.new()
-        state.request_pause(2)
+        state.request_pause(2, now=0)
         state.straight = True
         state.tick(0, "following", 1, None, True)
         state.tick(2, "following", 1, None, False)
         self.assertFalse(state.active)
+
+    def test_duplicate_pause_does_not_extend_deadline(self):
+        state = self.new()
+        state.request_pause(5, now=10)
+        with self.assertRaisesRegex(ValueError, "Already paused"):
+            state.request_pause(9, now=12)
+        self.assertEqual(state.resume_at, 15)
+
+    def test_long_timed_pause_freezes_red_instruction_wait(self):
+        state = self.new()
+        state.tick(10, "red_stop", 1, 10, True)
+        state.request_pause(60, now=12)
+        state.tick(72, "red_stop", 1, 10, True)
+        self.assertTrue(state.active)
+        self.assertIsNone(state.paused_at)
+        self.assertEqual(state.snapshot(72)["wait_remaining"], 58)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,50 @@
 # Track-free live-chat checks — handoff prepared 2026-09-10
 
+## Additional presentation checks — 2026-09-10
+
+`tools/exercise_map_demo.py` uses the running interactive simulation to exercise
+the actual app in map-only mode. It checks full-route Start, sequential junction
+dwell/crossing/reacquisition, destination red-stop completion, reconnect without
+resumption, and STOP DUCK2. All five checks passed; result
+`20260910T100744-map-demo.json` is outside the repository.
+
+For the exact production launcher and independent watchdog, run:
+
+```powershell
+py -3 tools/isolated_bench_check.py --execute --target robot --production-watchdog
+```
+
+This creates an isolated ROS master and fake camera/wheel/encoder publishers in
+a network-none container with no host devices, ports or mounts. It uses two CPU
+cores, a 1 GB memory limit and the existing 480-second outer deadline. Do not
+run this heavy check during a physical demo. Confirm the real controller is
+stopped first; end unnecessary companion processing before running it on ARM.
+The internal `verify_continuous_watchdog_ros.py` is not a robot-host command.
+
+The final onboard check `20260910T081205Z-c266e8bd` passed stopped startup,
+healthy simulated movement, encoder-stall stopping, competing-publisher stopping,
+and controller-crash emergency stopping/launcher cleanup. The native suite is
+now 424 tests: 421 passed and three skipped.
+
+These tests found and corrected two issues:
+
+- The ROS environment can disable shell error checking. The bench runner now
+  restores it after sourcing the environment and requires the specific check's
+  completion marker as well as a successful container exit. The earlier
+  `20260910T080443Z-11c527ee` result incorrectly reported a pass; its log contains
+  a startup assertion failure, so that result must not be used as success evidence.
+- Slow ARM startup could trip publisher ownership before the follower registered.
+  The watchdog now permits up to 15 seconds of initially absent ownership only
+  while all observed wheel output is zero. Once ownership is observed, its loss
+  follows the existing stop behavior. Competing publishers and movement do not
+  qualify for this startup allowance. Existing active-session stopping and all
+  movement/steering settings remain unchanged.
+
+An initial one-core simulation allocation also caused fresh-camera rejection;
+it was below the measured production workload of roughly 1.8 ARM cores. The
+test now uses two cores. A real-camera timeout observed during simulation startup
+is recorded separately from the later check with the heavy workload removed.
+
 ## Preparation facts
 
 Windows strict-key SSH authenticated after the laptop/robot reboot without a

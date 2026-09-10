@@ -13,6 +13,8 @@ def start_route(transport, plan, cancelled=lambda: False, live_session=None):
         return None
     if live_session is not None and (status.get("live_session") or {}).get("version") != 1:
         raise RuntimeError("Controller needs the live-chat update; keep duck2 stopped and prepare the updated image")
+    if live_session is not None and (status.get("live_session") or {}).get("pause_mode") != "immediate":
+        raise RuntimeError("Controller needs the immediate-pause update; prepare the updated driving mode before Start")
     publishers = status.get("wheel_publishers")
     if (not isinstance(publishers, list) or len(publishers) != 1
             or not publishers[0].endswith("/lane_follower_node")):
@@ -20,6 +22,23 @@ def start_route(transport, plan, cancelled=lambda: False, live_session=None):
             "Route control does not have exclusive wheel ownership; keep duck2 stopped")
     route = list(plan.route) if live_session is None else list(plan.route[:2])
     options = {} if live_session is None else {"managed_session": True, "run_id": live_session.run_id}
+    if live_session is not None and live_session.stop_at_next_red:
+        if (status.get("live_session") or {}).get("supports_pause_check") is not True:
+            raise RuntimeError("Prepare the updated controller before the pause check")
+        options["stop_at_next_red"] = True
+    if live_session is not None and live_session.finish_approach is not None:
+        if (status.get("live_session") or {}).get("supports_finish_approach") is not True:
+            raise RuntimeError("Prepare the updated final-red-line controller before Start")
+        options["finish_approach"] = live_session.finish_approach
+    if live_session is not None and live_session.stop_after_junction:
+        if (status.get("live_session") or {}).get("supports_stop_after_junction") is not True:
+            raise RuntimeError("Prepare the single-crossing controller before Start")
+        options["stop_after_junction"] = True
+    if live_session is not None and (live_session.finish_after_junction_red or live_session.center_initial_straight):
+        if (status.get("live_session") or {}).get("supports_initial_straight_check") is not True:
+            raise RuntimeError("Prepare the initial-straight controller before Start")
+        options["finish_after_junction_red"] = live_session.finish_after_junction_red
+        options["center_initial_straight"] = live_session.center_initial_straight
     ack = transport.send(
         "set_route", route=route, map_id=plan.map_id,
         start_approach=plan.start_approach,

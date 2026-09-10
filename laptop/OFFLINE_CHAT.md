@@ -1,8 +1,8 @@
 # Offline request interpreter
 
-Open **Start-OfflineChat.cmd** on Windows. This is a separate application from
-the existing driving companion. It needs Python 3 with Tk; the launcher first
-uses this laptop's bundled Python, then falls back to `py -3`.
+From the repository root, run `py -3 laptop/offline_chat.py` on Windows. This is a separate application from
+the existing driving companion. It needs Python 3 with Tk. Its obsolete shortcut was removed; this direct
+command uses standard Windows Python.
 
 The window interprets text only. It does not connect to a robot, call an API,
 publish commands, run timers, measure distance, or simulate movement. It can be

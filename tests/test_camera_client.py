@@ -4,6 +4,7 @@ from email.message import Message
 from pathlib import Path
 import sys
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "laptop"))
@@ -31,6 +32,25 @@ class Response:
 
 
 class CameraClientTests(unittest.TestCase):
+    def test_service_failures_are_distinct_from_network_timeout(self):
+        for code, message in ((503, "no fresh preview"), (401, "access denied"), (404, "HTTP 404")):
+            with self.subTest(code=code):
+                error = urllib.error.HTTPError("http://127.0.0.1:8766/camera", code, "failed", {}, None)
+                with patch("urllib.request.urlopen", side_effect=error):
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        CameraClient().frame()
+        with patch("urllib.request.urlopen", side_effect=TimeoutError()):
+            with self.assertRaisesRegex(RuntimeError, "timed out"):
+                CameraClient().frame()
+
+    def test_capture_timestamp_must_be_finite_and_positive(self):
+        for value in ("nan", "inf", "0", "bad"):
+            response = Response()
+            response.headers.replace_header("X-Captured-At", value)
+            with patch("urllib.request.urlopen", return_value=response):
+                with self.assertRaisesRegex(RuntimeError, "invalid frame metadata"):
+                    CameraClient().frame()
+
     def test_requires_loopback_ssh_tunnel(self):
         for url in ("http://duck2.local:8766", "https://127.0.0.1:8766", "bad"):
             with self.assertRaises(ValueError):

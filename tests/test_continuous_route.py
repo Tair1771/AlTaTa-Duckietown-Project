@@ -56,6 +56,7 @@ class ContinuousRouteTests(unittest.TestCase):
                         "_auto_continue:=true", "_sharp_corner_enabled:=true",
                         "_avoidance_enabled:=false", "_obstacle_enabled:=false",
                         "_require_client_heartbeat:=true",
+                        "_road_heading_guard:=false", "_junction_left_visual_latch:=true",
                         "_junction_right_encoder_assist:=true"):
             self.assertIn(setting, text)
 
@@ -111,6 +112,7 @@ class ContinuousRouteTests(unittest.TestCase):
         for setting in ("_lane_target_fraction:=0.441",
                         '_yellow_lower:="[20,70,80]"',
                         '_white_lower:="[0,0,150]"',
+                        "_road_white_reference_value:=170",
                         "_temporal_yellow_only_timeout:=5.0"):
             self.assertIn(setting, camera)
         self.assertIn("continuous_safety_watchdog.py", text)

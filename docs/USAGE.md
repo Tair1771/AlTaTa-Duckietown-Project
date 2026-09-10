@@ -1,199 +1,133 @@
-# Duck2 usage guide
+# Operate the companion
 
-This guide separates the apps that are safe to use anywhere from commands that
-require duck2 to be observed on the course. None of the Windows offline apps
-need an API key.
+Use [STARTUP](STARTUP.md) for installation and reboot recovery. All commands
+below run from the existing repository in **Windows PowerShell**. The app and
+its current local live chat do not require an API key.
 
-For stationary camera checks and synthetic onboard chatbot tests without a
-track, use [BENCH_CHAT_CHECKS.md](BENCH_CHAT_CHECKS.md). This routine keeps its
-synthetic ROS session isolated from hardware and does not prepare driving mode.
+## Choose one mode
 
-## What to start
+| Goal | Prepare | App |
+| --- | --- | --- |
+| Offline map planning | None | `laptop/Start-Duck2Companion.cmd` |
+| Stationary real camera | `tools/Start-Duck2-AppConnection.cmd` | Normal companion |
+| Physical route and live chat | `tools/Start-Duck2-DrivingMode.cmd` | Normal companion |
+| Current combined chat scenario | DrivingMode | `laptop/Start-Duck2-JunctionChatCheck.cmd` |
+| Pause-only scenario | DrivingMode | `laptop/Start-Duck2-PauseCheck.cmd` |
+| Simulated app practice | `py -3 tools/interactive_bench.py` | `laptop/Start-BenchCompanion.cmd` after BENCH READY |
 
-| Goal | Windows command or file | Connects to duck2? | Can move duck2? |
-| --- | --- | --- | --- |
-| Understand plain-English requests | `laptop/Start-OfflineChat.cmd` | No | No |
-| Preview basic high-level commands | `laptop/Start-CommandPreview.cmd` | No | No |
-| Plan and run a continuous route, view the camera and Stop | `laptop/Start-Duck2Companion.cmd` | Yes, when connected | Yes |
-| Check robot connection and normal ROS ownership | `tools/Start-Duck2-Check.cmd` | Yes, read-only | No |
-| Inspect a red line while stationary | `tools/Start-Duck2-GroundTest.cmd -InspectRedLine` | Yes | No |
-| Run a supervised test | `tools/Start-Duck2-GroundTest.cmd ... -Go` | Yes | Yes |
+Preview is driving-disabled. Simulation uses an isolated ROS master with no
+hardware access. Running a GUI alone does not start its backend. Do not run
+preview and driving backends together on the same ports/ROS node names.
 
-Run the `.cmd` files by double-clicking them, or open Windows PowerShell in the
-repository root and run the equivalent command with `./`.
+## Start a continuous session
 
-## Offline chatbot and command preview
+1. Power on duck2 on the configured hotspot. Run `tools/Start-Duck2-Check.cmd`.
+   A working SSH connection does not establish wheel ownership or scene quality.
+2. Keep duck2 stopped and run `tools/Start-Duck2-DrivingMode.cmd`. It uploads
+   current Python source, uses the installed pinned ARM64 base, stops project
+   preview and normal `car-interface`, and prepares the temporary
+   `duck2-companion-driving` container. It verifies exclusive wheel ownership,
+   zero requested/executed output and `awaiting_route` before releasing a prior
+   test emergency-stop latch. It sends no route or Continue. No local Docker
+   Desktop build is needed.
+3. Open `laptop/Start-Duck2Companion.cmd`. On **Camera & status**, connect to
+   `http://127.0.0.1:8765` and start viewing `http://127.0.0.1:8766`. These are
+   local SSH tunnel addresses, not the robot's hotspot address.
+4. On **Map & route**, choose the actual directed starting lane and destination
+   red line. A* chooses the fewest legal junction crossings in the directed map.
+   Use Fit map/resize as needed. Physical placement determines the starting state;
+   there is no automatic global localization.
+5. Leave **Live chat (ask when queue ends)** checked for chat control, or uncheck
+   it to finish a map-only route at the destination. Confirm placement and press
+   **Start selected route** while observing duck2.
+6. Type commands in **Live chat** and press Enter/Send message. Shift+Enter adds
+   a line. The user sends messages; the app does not preload a test script.
+   See [LIVE_CHAT](LIVE_CHAT.md) for exact supported phrases and deadlines.
 
-The two offline chat windows use only Python's standard library and Tk. Start
-them from the repository root:
+Start is a high-level request. Displayed wheel values are requests, not proof
+of motion. Status and camera views are separate services; a healthy preview
+does not prove the controller has stayed healthy throughout a run.
 
-```powershell
-py -3 laptop/offline_chat.py
-py -3 laptop/command_preview_chat.py
-```
+## Optional chat scenarios
 
-The first explains what it understood. The second can make local drafts for
-`stop`, `speed_up`, `slow_down`, and the next `left`, `right`, or `straight`
-turn. **Record preview** saves only an in-memory fake-receiver record. Neither
-window makes a network request or sends a ROS command.
+The normal companion above is the complete app, with live chat enabled by
+default and no scenario-specific completion limit. The shortcuts below are
+optional rehearsals. They do not replace the normal launcher.
 
-## Combined companion and continuous route
+The initial-straight check selects A → E → B and ends at the red line after
+one junction. Sending `go straight at the next junction` changes its finish to
+C. See [the scenario options](LIVE_CHAT.md) before choosing a test shortcut.
 
-Start the companion with:
+### Multi-junction rehearsal
 
-```powershell
-py -3 laptop/duck2_companion.py
-```
+Place duck2 after the curve on the A → E straight, centred in the right lane.
+Open `laptop/Start-Duck2-JunctionChatCheck.cmd` after preparing DrivingMode.
+It selects A → E → B → C, connects and shows the camera but does not start.
 
-The **Map & route** tab asks for a directed starting lane and a red-line
-destination. It calculates a right-lane-only A* route with the fewest junction
-crossings. Local live chat is available in the Camera & status panel; see
-[LIVE_CHAT.md](LIVE_CHAT.md) for queue edits, straight-only speed profiles and
-pause behavior. The app can send a confirmed route
-to the `lane-continuous` controller; it sends no wheel-level values.
+1. Confirm placement and click Start. While moving, type `stop for 7s`.
+2. During/before the end of the pause, type `go straight at the next junction`.
+   This replaces the future left/right queue with one straight crossing at E.
+3. The controller stops/dwells at E, crosses toward E → C, then returns to road
+   lane following, including the left curve. Straight is a junction instruction,
+   not a command to hold straight steering over the next road segment.
+4. At C it asks for a direction and waits up to 60 seconds from red-stop arrival.
+   Type `go left`; the legal outgoing approach is C → B.
+5. The scenario follows that lane and ends at the C → B red line.
 
-The **Camera & status** tab keeps the large camera view beside robot status,
-connection, route start and **STOP DUCK2**. Normal, Mask and Overlay remain
-read-only views. Closing the app requests Stop; loss of its heartbeat also
-stops control.
+The scenario is implemented. The latest physical attempt ended because the
+battery depleted; it remains **incomplete, not validated as a full sequence**.
+Do not resume an old run after picking up the robot: reset its directed start.
 
-### Start a continuous session
+## Camera and status
 
-Keep duck2 stationary on the selected right lane, outside an intersection.
+Normal shows the image; Mask shows detected colours; Overlay adds detector
+diagnostics. The normal companion needs explicit Connect and Start viewing;
+scenario shortcuts connect automatically. Camera viewing does not send motion.
+If a controller fault ends a junction, a fresh-looking preview afterward does
+not invalidate that fault. Check the recorded stop reason before changing colour
+thresholds. The camera timeout is retained; preview processing is rate-limited.
 
-1. Verify connectivity with `tools/Start-Duck2-Check.cmd`.
-2. Run `tools/Start-Duck2-DrivingMode.cmd` from Windows. It uploads the current
-   Python sources, uses the pinned installed ARM64 runtime, stops the stationary
-   preview and normal `car-interface`, then starts a temporary driving container.
-   It preserves all `lane-continuous.sh` parameters and verifies exclusive wheel
-   ownership, `awaiting_route`, manual stop and zero output. A previous running
-   driving container is replaced only after those stopped-state checks pass, so
-   revised source cannot be hidden by an old container. It reuses or creates the
-   SSH tunnel. It then releases the driver's prior test emergency-stop latch
-   only while the controller is manually stopped awaiting a route, requested and
-   executed wheel values are zero, and there is no new emergency-stop request or
-   unknown stop publisher. The installed HTTP API emergency-stop control stays available.
-   No route or Continue command is sent. Docker Desktop and
-   `dts devel build` are not needed for this source-mounted session.
-3. Open `laptop/Start-Duck2Companion.cmd`. On **Camera & status**, press
-   **Connect to duck2** and **Start viewing**. Select the directed starting
-   lane and destination red line on the map. Confirm the physical placement,
-   then press **Start selected route** while watching duck2.
+## Pauses, Stop and recovery
 
-The app refuses to start if the lane follower is not the only wheel-command
-publisher. Stop invalidates a queued or partly completed Start transaction, and
-the controller's control epoch rejects a delayed Continue after Stop. It sends a
-heartbeat every 0.5 seconds. Ordinary lane following
-handles straights and smooth curves. A recently complete lane followed by loss
-of the right white edge, retained yellow divider and a consistent right-turn
-error activates the tested sharp-right state machine. Red lines select the next
-A* route turn. In map-only mode the selected destination red line ends the run.
-With **Live chat** enabled, the laptop sends one turn at each red stop and asks
-for another when the queue ends; the robot holds there for up to 30 seconds.
+`stop for 7s` requests zero as soon as the robot accepts it and resumes after
+seven seconds if healthy. Transport/braking have nonzero latency. The pause
+preserves the queue. Bare `stop` pauses for up to 30 seconds awaiting Continue.
+At an empty-queue red stop, the separate direction timeout is 60 seconds.
+**STOP DUCK2** or `quit` ends the run and cancels automatic resume.
 
-Use **STOP DUCK2** before ending. Stop the temporary container before restoring
-normal control, then close the SSH tunnel:
+Closing the app requests Stop; heartbeat loss also stops the controller.
+Camera freshness, watchdog, ownership, stall and maneuver deadlines remain
+active. After a fault or Stop, confirm physical placement and start a new run.
+An old Go does not authorize an assistant to start another physical run.
+
+## Finish and recover
+
+1. Press **STOP DUCK2** and confirm the robot is physically stopped.
+2. Close the app. Stop only the temporary project container. The commands below
+   are deliberate cleanup, not a task to run automatically on every connection:
 
 ```powershell
 ssh duck2 docker stop -t 10 duck2-companion-driving
 ssh duck2 docker rm duck2-companion-driving
-ssh duck2 docker start car-interface
-tools\Start-Duck2-Check.cmd
 ```
 
-The driving container has no automatic restart policy. A new preparation starts
-stopped. If an earlier container is running, preparation first requires it to be
-manually stopped, awaiting a route, at zero output, and under exclusive control;
-it then replaces that container with the current local source. If preparation
-fails after suspending normal control, it leaves `car-interface` stopped and
-reports the failure rather than resuming control unexpectedly.
+Confirm temporary publishers have exited and wheel output is zero. Restore
+normal `car-interface` only when normal controller operation is intended and
+cannot resume unwanted motion. Then use `ssh duck2 docker start car-interface`
+and `tools/Start-Duck2-Check.cmd` to inspect normal ownership. Otherwise leave
+normal control stopped. Close only the project SSH tunnel when finished.
 
-Safety stops remain active for stale/lost camera data, lane loss outside an
-authorized maneuver, encoder stalls, loss of the desktop heartbeat, competing
-wheel publishers and maneuver deadlines. An independent continuous-session
-watchdog also watches requested and executed wheels, lane status, encoder
-progress and publisher ownership. It asserts the driver's emergency stop and
-ends the temporary process group on a fault. A fault requires physical placement
-confirmation and a new route; it never resumes automatically.
+A new driving preparation starts stopped and refuses an unsafe replacement.
+If preparation fails after suspending normal control it leaves it stopped.
+Do not restart containers indiscriminately to clear a warning.
 
-The camera Normal, Mask and Overlay views use the same target, yellow/white HSV
-limits, temporal lane-width fallback and boundary-risk settings as the continuous
-controller. Preview diagnostics therefore describe the active detector preset;
-they still do not prove physical steering or stopping.
+For preview-only cleanup, stop/remove `duck2-companion-preview` instead; see
+[APP_CONNECTION](APP_CONNECTION.md). For source changes: Stop, close the app,
+prepare again while stopped, reopen, confirm the actual starting lane.
 
-## Read-only camera view
+## Other tools
 
-The camera app expects `http://127.0.0.1:8766`. Its service must be running on
-duck2 first. From a prepared Duckietown development session, launch only the
-read-only service:
-
-```powershell
-dts devel run -R duck2 -L lane-camera-view
-```
-
-In a second Windows PowerShell, create the local-only tunnel and leave that
-window open while viewing:
-
-```powershell
-ssh -N -L 8766:127.0.0.1:8766 duck2
-```
-
-Then start the companion, open **Camera & status**, keep the default local
-address, and select **Start viewing**. Choose **Normal**, **Mask**, or
-**Overlay**. Select **Stop** before closing the tunnel. The service subscribes
-to the compressed camera topic and exposes no command endpoint. Do not run a
-driving launcher merely to use the camera.
-
-If the app reports that the camera connection is unavailable, first run
-`tools/Start-Duck2-Check.cmd`; confirm the robot has booted and the service is
-still running. Never replace the loopback address with duck2's hotspot IP.
-
-## Connection check
-
-Turn on the laptop hotspot, then duck2, and allow two to five minutes for the
-robot to boot and join the hotspot. Run:
-
-```powershell
-tools/Start-Duck2-Check.cmd
-```
-
-The check verifies the saved SSH identity and key login, ROS master, essential
-containers, and normal wheel publisher. It does not view images, publish wheels
-or call motor services. If the key agent was restarted, unlock the dedicated
-key with `ssh-add $env:USERPROFILE\.ssh\duck2_ed25519` and enter only the key
-passphrase.
-
-## Track-test commands
-
-Every movement test requires duck2 upright, on the track, observed by a person,
-with the cable slack and clear of the wheels. The bot must be stationary before
-you add `-Go`.
-
-The following is the earlier calibration/test workflow, retained for deliberate
-recalibration. Do not overwrite the accepted launcher preset with these example
-values. Current individual crossings have been exercised; continuous routes
-remain to be physically verified. First, collect stationary samples at 15 cm, 10 cm and 5 cm
-front-to-line positions. This keeps the emergency stop latched and does not
-move duck2:
-
-```powershell
-.\tools\Start-Duck2-GroundTest.cmd -Label red-line-10cm -InspectRedLine
-```
-
-After choosing the provisional red threshold from those samples, the next
-example moving test is one straight four-way crossing:
-
-```powershell
-.\tools\Start-Duck2-GroundTest.cmd -Label junction-straight -Duration 15 `
-  -JunctionTurn straight -RedStopTriggerBottomFraction 0.80 -Go
-```
-
-`0.80` is only an example until the stationary samples establish the correct
-threshold. A junction test permits missing lane borders only during its bounded
-authorized crossing and reacquisition phases. It still stops on stale camera
-data, controller faults, wheel stalls, ownership conflicts, manual Stop or its
-deadline.
-
-Details of all status fields, command semantics and safety gates are in
-[COMMAND_INTERFACE.md](COMMAND_INTERFACE.md). Measured history and remaining
-physical work are in [TESTING.md](TESTING.md).
+[BENCH_CHAT_CHECKS](BENCH_CHAT_CHECKS.md) covers track-free rehearsal.
+[HISTORICAL_BENCH_SETUP](HISTORICAL_BENCH_SETUP.md) preserves old bounded trial
+commands; they are not the current app workflow. Earlier offline interpreters
+remain runnable directly with Python; see [laptop/README](../laptop/README.md).

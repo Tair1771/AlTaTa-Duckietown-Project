@@ -139,6 +139,34 @@ try:
     assert received and received[-1] == (0.,0.), "SIGINT zero message not delivered"
     print("PASS actual ROS: camera timeout, recovery and SIGINT zero delivery", flush=True)
 
+    # Complete synthetic border pairs must anticipate a left bend, while
+    # missing markings and stale frames still stop the real ROS process.
+    bend = np.zeros_like(image)
+    cv2.line(bend, (150,240), (65,455), (0,255,255), 18)
+    cv2.line(bend, (390,240), (575,455), (220,220,220), 18)
+    start("true", ["_road_left_lookahead:=true", "_flip_steering:=true",
+                   "_base_speed:=0.09", "_max_speed:=0.20", "_max_steering:=0.11",
+                   "_k_p:=0.75", "_lane_target_fraction:=0.441",
+                   "_junction_straight_lane_target_fraction:=0.49",
+                   "_temporal_lane_width_fallback:=true"])
+    stream(bend, 1.5)
+    assert latest_status["road_left_lookahead_used"], latest_status
+    assert latest_status["wheel_speeds"][1] > latest_status["wheel_speeds"][0], latest_status
+    white_only_bend = bend.copy()
+    white_only_bend[:,:220] = 0
+    stream(white_only_bend, .4)
+    assert latest_status["road_left_gap_active"], latest_status
+    assert latest_status["wheel_speeds"][1] > latest_status["wheel_speeds"][0], latest_status
+    stream(white_only_bend, .7)
+    assert received[-1] == (0.,0.), "White-only curve continuation exceeded its deadline"
+    stream(bend, .8)
+    time.sleep(.8)
+    assert received[-1] == (0.,0.), "Lookahead must not override stale camera stop"
+    stream(np.zeros_like(image), .5)
+    assert received[-1] == (0.,0.), "Lookahead must not invent missing boundaries"
+    stop()
+    print("PASS actual ROS: left-road lookahead, missing borders and camera timeout", flush=True)
+
     # Opt-in steering mode must reach the actual ROS node and retain its gates.
     smooth_flags = ["_smooth_steering_deadband:=true", "_steering_bias:=0.015",
                     "_k_p:=0.75", "_near_center_k_p:=0.35",
@@ -193,6 +221,59 @@ try:
     assert received and all(x == (0.,0.) for x in received), "Stop latch released"
     stop()
     print("PASS actual ROS: JPEG red-line detection and persistent stop", flush=True)
+
+    start("true", ["_route_enabled:=true", "_junctions_calibrated:=true",
+                   "_junction_straight_visual_approach:=true",
+                   "_junction_left_visual_latch:=true", "_road_heading_guard:=true",
+                   "_junction_straight_lateral_gain:=0.25",
+                   "_junction_straight_heading_gain:=0.30",
+                   "_junction_straight_lane_target_fraction:=0.49",
+                   "_junction_left_speed:=0.105", "_junction_left_bias:=0.075",
+                   "_junction_right_speed:=0.10", "_junction_right_bias:=0.10",
+                   "_junction_left_seconds:=1.6", "_junction_reacquire_timeout:=9.0",
+                   "_junction_straight_reacquire_seconds:=0.5",
+                   "_max_speed:=0.20", "_min_active_wheel_speed:=0.03"])
+    stream(image, .4)
+    command("set_route", route=["A", "B", "D"], position_confirmed=True)
+    command("continue")
+    stream(red, 2.5)
+    stream(np.zeros_like(image), 2.5)
+    assert latest_status["state"] == "reacquiring", latest_status
+    assert not latest_status["junction_left_visual_entry"], latest_status
+    # An offset but longitudinal corridor should end the arc before centering
+    # is complete. Its rightward correction must not restart the left arc.
+    offset_lane = np.zeros_like(image)
+    cv2.rectangle(offset_lane, (215,240), (235,455), (0,255,255), -1)
+    cv2.rectangle(offset_lane, (510,240), (530,455), (255,255,255), -1)
+    stream(offset_lane, .6)
+    assert latest_status["junction_left_visual_entry"], latest_status
+    assert latest_status["state"] == "reacquiring", latest_status
+    assert latest_status["route_index"] == 1, latest_status
+    assert received[-1][0] > received[-1][1], received[-5:]
+    stream(np.zeros_like(image), .3)
+    assert latest_status["state"] == "fault", latest_status
+    assert received[-1] == (0., 0.), received[-5:]
+    # Repeat only in this hardware-isolated simulation: a short connector's
+    # next red must finish the left edge and select B's right exit, not fault.
+    command("set_route", route=["A", "E", "B", "C"], position_confirmed=True)
+    command("continue")
+    stream(red, 2.5)
+    stream(np.zeros_like(image), 2.5)
+    stream(offset_lane, .8)
+    assert latest_status["junction_left_red_rearmed"], latest_status
+    stream(red, .3)
+    assert latest_status["state"] == "red_stop", latest_status
+    assert latest_status["route_index"] == 2, latest_status
+    assert received[-1] == (0.,0.), received[-5:]
+    stream(np.zeros_like(image), 3.3)
+    assert latest_status["active_turn"] == "right", latest_status
+    assert latest_status["route_index"] == 2, latest_status
+    assert received[-1][0] > 0 and received[-1][1] == 0, received[-5:]
+    command("stop")
+    assert received[-1] == (0.,0.), received[-5:]
+    stop()
+    print("PASS actual ROS: left arc hands off to visual correction; corridor loss stops", flush=True)
+    print("PASS actual ROS: second red after left exit dwells then starts right pivot", flush=True)
 
     start("true", ["_route_enabled:=true", "_junctions_calibrated:=true",
                    "_junction_reacquire_timeout:=7.0",
@@ -399,8 +480,18 @@ try:
     received.clear()
     stream(image, .6)
     assert received and max(max(v) for v in received) <= .120001, received
+    # Break the straight classifier before requesting pause. Missing markings
+    # are not required: a valid slanted corridor must also stop at receipt.
+    slanted = np.zeros_like(image)
+    cv2.line(slanted, (260, 240), (160, 475), (0, 255, 255), 20)
+    cv2.line(slanted, (570, 240), (470, 475), (255, 255, 255), 20)
+    stream(slanted, .3)
+    assert not latest_status["live_session"]["straight"]
     command("pause", seconds=1.0, run_id=run_id,
             expected_control_epoch=latest_status["control_epoch"])
+    assert latest_status["live_session"]["pause_mode"] == "immediate"
+    assert latest_status["live_session"]["paused"]
+    assert latest_status["wheel_speeds"] == [0., 0.]
     received.clear()
     stream(image, .5)
     assert received and all(v == (0., 0.) for v in received), received

@@ -13,6 +13,139 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "laptop"))
 
 class CompanionWindowTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "win32", "Native Windows Tk test")
+    def test_normal_app_chat_and_start_stop_races(self):
+        with patch.object(socket, "socket", side_effect=AssertionError("Network attempted")):
+            import tkinter as tk
+            from duck2_companion import CompanionWindow
+            root = tk.Tk()
+            root.geometry("900x650+10000+10000")
+            window = CompanionWindow(root)
+            pending, sessions = [], []
+            window._background = lambda operation, kind: pending.append(operation)
+            window._start_route = lambda transport, plan, generation, live: sessions.append(live)
+            try:
+                window.choose_start("A->E")
+                window.choose_destination("B->C")
+                window.position_confirmed.set(True)
+                window.control_connected = True
+                window.start_selected_route()
+                self.assertEqual(len(pending), 1)
+                pending[0]()
+                live = sessions[0]
+                self.assertEqual(live.queue, ["left", "right"])
+                self.assertFalse(any((live.stop_at_next_red, live.stop_after_junction,
+                                     live.finish_after_junction_red, live.center_initial_straight)))
+                self.assertIsNone(live.finish_approach)
+                self.assertEqual(window.message_entry.get("1.0", "end").strip(), "")
+                # A failed heartbeat must not make the unfinished Start retryable.
+                window.events.put(("control_error", "Heartbeat timed out"))
+                window._drain_control()
+                self.assertTrue(window.route_start_pending)
+                window.connect_control()
+                window.start_selected_route()
+                self.assertEqual(len(pending), 1)
+                self.assertIsNone(window.transport)
+                # Stop may win after the Start result was queued for display.
+                window.stop_requested = True
+                window.events.put(("route_started", {"state": "following"}))
+                window._drain_control()
+                self.assertIn("Stop takes priority", window.status.get())
+                self.assertFalse(window.route_start_pending)
+                window.route_start_pending = True
+                window.events.put(("route_start_error", "Start rejected"))
+                window._drain_control()
+                self.assertFalse(window.route_start_pending)
+            finally:
+                window.close()
+
+    @unittest.skipUnless(sys.platform == "win32", "Native Windows Tk test")
+    def test_initial_straight_chat_keeps_left_draft_and_empty_user_input(self):
+        with patch.object(socket, "socket", side_effect=AssertionError("Network attempted")):
+            import tkinter as tk
+            from duck2_companion import CompanionWindow
+            root = tk.Tk()
+            root.geometry("900x650+10000+10000")
+            window = CompanionWindow(root, initial_straight_chat_check=True)
+            pending, sessions = [], []
+            window._background = lambda operation, kind: pending.append(operation)
+            window._start_route = lambda transport, plan, generation, live: sessions.append(live)
+            try:
+                window.choose_start("A->E")
+                window.choose_destination("E->B")
+                root.update()
+                self.assertEqual(window.message_entry.get("1.0", "end").strip(), "")
+                self.assertEqual(pending, [])
+                window.position_confirmed.set(True)
+                window.control_connected = True
+                window.start_selected_route()
+                pending.pop()()
+                self.assertEqual(sessions[0].queue, ["left"])
+                self.assertTrue(sessions[0].center_initial_straight)
+                self.assertTrue(sessions[0].finish_after_junction_red)
+                self.assertFalse(sessions[0].stop_after_junction)
+            finally:
+                window.close()
+
+    @unittest.skipUnless(sys.platform == "win32", "Native Windows Tk test")
+    def test_single_crossing_window_only_starts_on_user_request(self):
+        with patch.object(socket, "socket", side_effect=AssertionError("Network attempted")):
+            import tkinter as tk
+            from duck2_companion import CompanionWindow
+            root = tk.Tk()
+            root.geometry("900x650+10000+10000")
+            window = CompanionWindow(root, straight_crossing_check=True)
+            pending, sessions = [], []
+            window._background = lambda operation, kind: pending.append(operation)
+            window._start_route = lambda transport, plan, generation, live: sessions.append(live)
+            try:
+                window.choose_start("A->E")
+                window.choose_destination("E->C")
+                root.update()
+                self.assertEqual(window.message_entry.get("1.0", "end").strip(), "")
+                self.assertEqual(pending, [])
+                window.position_confirmed.set(True)
+                window.control_connected = True
+                window.start_selected_route()
+                pending.pop()()
+                self.assertEqual(sessions[0].queue, ["straight"])
+                self.assertTrue(sessions[0].stop_after_junction)
+                self.assertIsNone(sessions[0].finish_approach)
+            finally:
+                window.close()
+
+    @unittest.skipUnless(sys.platform == "win32", "Native Windows Tk test")
+    def test_fresh_scenario_has_blank_chat_and_only_user_start_creates_session(self):
+        with patch.object(socket, "socket", side_effect=AssertionError("Network attempted")):
+            import tkinter as tk
+            from duck2_companion import CompanionWindow
+            root = tk.Tk()
+            root.geometry("900x650+10000+10000")
+            window = CompanionWindow(root, junction_chat_check=True)
+            pending, sessions = [], []
+            window._background = lambda operation, kind: pending.append(operation)
+            window._start_route = lambda transport, plan, generation, live: sessions.append(live)
+            try:
+                window.choose_start("A->E")
+                window.choose_destination("B->C")
+                root.update()
+                self.assertEqual(window.message_entry.get("1.0", "end").strip(), "")
+                self.assertEqual(window.session.plan.route, ("A", "E", "B", "C"))
+                self.assertEqual(pending, [])
+                for _ in range(2):
+                    window.position_confirmed.set(True)
+                    window.control_connected = True
+                    window.route_start_pending = False
+                    window.start_selected_route()
+                    pending.pop()()
+                self.assertNotEqual(sessions[0].run_id, sessions[1].run_id)
+                for live in sessions:
+                    self.assertEqual(live.finish_approach, "C->B")
+                    self.assertEqual(live.queue, ["left", "right"])
+                    self.assertIsNone(live.inflight)
+            finally:
+                window.close()
+
+    @unittest.skipUnless(sys.platform == "win32", "Native Windows Tk test")
     def test_bench_mode_uses_separate_loopback_endpoints_and_visible_label(self):
         with patch.object(socket, "socket", side_effect=AssertionError("Network attempted")):
             import tkinter as tk

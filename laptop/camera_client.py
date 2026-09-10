@@ -1,6 +1,7 @@
 """Read-only camera client used by the Windows companion."""
 
 from dataclasses import dataclass
+import math
 import queue
 import threading
 import time
@@ -42,11 +43,23 @@ class CameraClient:
                     raise RuntimeError("Camera frame is too large")
                 age = float(response.headers.get("X-Camera-Age", "nan"))
                 captured_at = float(response.headers.get("X-Captured-At", "nan"))
-                if not data.startswith(b"P6\n") or not 0 <= age <= 30:
+                if (not data.startswith(b"P6\n") or not 0 <= age <= 30
+                        or not math.isfinite(captured_at) or captured_at <= 0):
                     raise RuntimeError("Camera returned invalid frame metadata")
                 return CameraFrame(data, view, age, captured_at,
                                    response.headers.get("X-Diagnostic", ""))
-        except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        except urllib.error.HTTPError as error:
+            code = error.code
+            error.close()
+            if code == 503:
+                raise RuntimeError("Camera service reached, but no fresh preview is available. "
+                                   "Keep duck2 stopped and prepare the updated camera/driving backend.") from error
+            if code in (401, 403):
+                raise RuntimeError("Camera access denied; check the view token and local SSH connection.") from error
+            raise RuntimeError("Camera service returned HTTP %s; check its backend and address." % code) from error
+        except ValueError as error:
+            raise RuntimeError("Camera returned invalid frame metadata") from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise RuntimeError("Camera connection unavailable or timed out") from error
 
 

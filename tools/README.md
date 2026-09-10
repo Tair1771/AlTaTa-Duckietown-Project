@@ -14,6 +14,8 @@ Current commands and troubleshooting: [STARTUP](../docs/STARTUP.md).
 | `isolated_bench_check.py` | Disposable network-none tests locally/onboard |
 | `interactive_bench.py`, `bench_scene.py`, `bench_rpc.py` | Isolated onboard simulation and allowlisted stdio bridge |
 | `exercise_interactive_bench.py` | Actual app callback checklist against simulation |
+| `exercise_map_demo.py` | Map-only multi-junction/destination/reconnect app rehearsal against simulation |
+| `verify_continuous_watchdog_ros.py` | Internal production-launcher fault checks; use the isolated runner's `--production-watchdog` option |
 | `check_stationary_camera.py` | Preview decode/timestamp checks; no physical wheel commands |
 | `build_local.py` | Pinned local AMD64/ARM64 build |
 | `check_project.py` | Offline source/link/launcher audit and native tests |

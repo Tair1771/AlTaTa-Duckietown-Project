@@ -29,9 +29,11 @@ cp -r /project/packages "$DT_REPO_PATH/"
 cp /project/launchers/*.sh "$DT_LAUNCH_PATH/"
 chmod +x "$DT_REPO_PATH"/packages/duckie_lane_follower/src/*.py "$DT_LAUNCH_PATH"/*.sh
 source /opt/ros/noetic/setup.bash
+set -eo pipefail
 catkin build --workspace /code/catkin_ws duckie_lane_follower --no-status -j1 -p1
 dt-install-launchers "$DT_LAUNCH_PATH"
 source /environment.sh
+set -eo pipefail
 export ROS_MASTER_URI=http://localhost:11311 ROS_HOSTNAME=localhost VEHICLE_NAME=duck2
 export PYTHONPATH=/project/tests:/project/laptop:$DT_REPO_PATH/packages/duckie_lane_follower/src:${PYTHONPATH:-}
 cd /project
@@ -96,7 +98,13 @@ class Target:
         return self.run(prefix + args, **kwargs)
 
 
-def execute(robot):
+def checks_passed(state, output, production_watchdog=False):
+    marker = "PRODUCTION_WATCHDOG_PASS" if production_watchdog else "PASS actual ROS: experimental pass/return"
+    return (not state["Running"] and state["ExitCode"] == 0
+            and "BENCH_SYNTHETIC_PASS" in output and marker in output)
+
+
+def execute(robot, production_watchdog=False):
     target = Target(robot)
     config = json.loads((ROOT / "config/duck2.json").read_text())
     image = config["base_images"]["arm64v8" if robot else "amd64"]
@@ -125,7 +133,22 @@ def execute(robot):
                                 "-o", "ConnectTimeout=5", str(bundle),
                                 "duck2:" + remote_dir + "/bench.tar.gz"], check=True, timeout=90)
                 archive_path = remote_dir + "/bench.tar.gz"
-            target.docker(create_args(name, image))
+            creation = create_args(name, image)
+            if production_watchdog:
+                # Production camera/controller processing uses roughly two ARM
+                # cores. A one-core cap tests artificial CPU starvation instead
+                # of the intended watchdog faults.
+                creation[creation.index("--cpus")+1] = "2"
+                creation[-1] = '''set -eo pipefail
+tar --no-same-owner -xzf /tmp/bench.tar.gz -C /
+source /environment.sh
+set -eo pipefail
+export ROS_MASTER_URI=http://localhost:11311 ROS_HOSTNAME=localhost VEHICLE_NAME=duck2
+export DUCK2_ISOLATED_BENCH=1 PYTHONPATH=/project/tools:/project/laptop:/project/packages/duckie_lane_follower/src:${PYTHONPATH:-}
+python3 /project/tools/verify_continuous_watchdog_ros.py
+echo BENCH_SYNTHETIC_PASS
+'''
+            target.docker(creation)
             created = True
             info = json.loads(target.docker(["inspect", name]).stdout)[0]
             verify_isolation(info)
@@ -135,10 +158,10 @@ def execute(robot):
             result = target.docker(["start", "-a", name], timeout=520, check=False)
             (output / "checks.log").write_text(result.stdout + result.stderr, encoding="utf-8")
             state = json.loads(target.docker(["inspect", name]).stdout)[0]["State"]
-            passed = (not state["Running"] and state["ExitCode"] == 0
-                      and "BENCH_SYNTHETIC_PASS" in result.stdout)
+            passed = checks_passed(state, result.stdout, production_watchdog)
             (output / "result.json").write_text(json.dumps({"passed": passed, "state": state,
-                 "target": "robot" if robot else "local", "physical_tests": False}, indent=2), encoding="utf-8")
+                 "target": "robot" if robot else "local", "physical_tests": False,
+                 "production_watchdog": production_watchdog}, indent=2), encoding="utf-8")
             if not passed:
                 raise RuntimeError("Synthetic check failed. Read " + str(output / "checks.log"))
             print("PASS: synthetic ROS/session tests; no hardware access. " + str(output), flush=True)
@@ -163,11 +186,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--target", choices=("local", "robot"), default="local")
+    parser.add_argument("--production-watchdog", action="store_true",
+                        help="Exercise the production launcher with isolated fake hardware")
     args = parser.parse_args()
     if not args.execute:
         print("PLAN ONLY: isolated synthetic ROS tests, no hardware. Use --execute --target local|robot.")
         return
-    execute(args.target == "robot")
+    execute(args.target == "robot", args.production_watchdog)
 
 
 if __name__ == "__main__":

@@ -1016,11 +1016,19 @@ class NavigationTests(LaneTests):
     def test_camera_loss_mid_turn_requires_reset(self):
         self.configure_route()
         self.enter_crossing()
+        self.node._camera_processing_started_at = self.now
+        self.node._last_camera_received_at = self.now
         self.now += .6
         self.node.check_camera_timeout(None)
         self.assertEqual(self.node.navigation_state, "fault")
         self.assertTrue(self.node.manual_stop)
         self.assertEqual(self.speeds(), (0,0))
+        detail = self.node._last_camera_timeout
+        self.assertGreater(detail["frame_age"], .5)
+        self.assertAlmostEqual(detail["processing_elapsed"], .6)
+        self.assertAlmostEqual(detail["receive_age"], .6)
+        # Receiving/processing an image cannot extend freshness by itself.
+        self.assertEqual(self.node._camera_timeout, .5)
 
     def test_stop_mid_turn_requires_reset(self):
         self.configure_route()

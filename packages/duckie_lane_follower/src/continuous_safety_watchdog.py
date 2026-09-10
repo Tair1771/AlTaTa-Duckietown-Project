@@ -76,6 +76,7 @@ def main():
             ownership_bad_since = (None if publishers == ["/lane_follower_node"]
                                    else ownership_bad_since or time.monotonic())
             checked_publishers = (publishers if ownership_bad_since is None
+                                  or not state.owner_seen
                                   or time.monotonic() - ownership_bad_since >= 0.3
                                   else ["/lane_follower_node"])
             with lock:

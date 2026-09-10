@@ -20,6 +20,14 @@ from email.message import Message
 
 
 class BenchTests(unittest.TestCase):
+    def test_shell_success_alone_cannot_hide_an_aborted_check(self):
+        state = {"Running": False, "ExitCode": 0}
+        self.assertFalse(bench.checks_passed(state, "BENCH_SYNTHETIC_PASS", True))
+        markers = "PRODUCTION_WATCHDOG_PASS\nBENCH_SYNTHETIC_PASS"
+        self.assertTrue(bench.checks_passed(state, markers, True))
+        self.assertFalse(bench.checks_passed({"Running": False, "ExitCode": 1}, markers, True))
+        self.assertFalse(bench.checks_passed({"Running": True, "ExitCode": 0}, markers, True))
+
     def test_tunnel_reuse_requires_both_services(self):
         status = io.BytesIO(b'{"state":"awaiting_route"}')
         camera = io.BytesIO(b"P6")
