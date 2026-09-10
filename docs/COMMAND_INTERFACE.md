@@ -1,153 +1,45 @@
-# Commands and navigation
+# Runtime command interface
 
-The existing compressed camera input and stamped wheel output topics are unchanged.
-Additional std_msgs/String topics:
-- /duck2/lane_follower/command: JSON commands.
-- /duck2/lane_follower/status: live JSON state, route, next junction, speed,
-  camera age, published wheel speeds and latest command acknowledgment.
+The app uses gateway `/status`, `/heartbeat` and `/command` endpoints over local
+SSH. JSON commands and status use `/duck2/lane_follower/command` and
+`/duck2/lane_follower/status`. Camera and stamped-wheel interfaces are unchanged.
 
-All normal commands need a unique string id and issued_at (Unix seconds).
-The node accepts normal commands between two seconds in the future and five
-seconds old. The desktop timestamps requests; the gateway supplies a timestamp only if absent.
-Stop is accepted regardless of age. Recent ids are deduplicated (100 retained).
-The command response reports accepted/rejected, not measured physical success.
+Commands carry unique `id`, `client_id` and Unix `issued_at`. Normal requests
+must be at most five seconds old or two seconds in the future; Stop ignores age.
+Recent identifiers are deduplicated. Acceptance is not proof of physical motion.
 
-## Managed live-chat mode
+## Start and Stop
 
-`set_route` can additionally carry `managed_session: true` and a unique `run_id`.
-The initial route contains only the two starting-lane junctions. Status advertises
-`live_session.version: 1`, the run id, profile, pending/active pause and deadlines,
-plus `current_approach` and `junction_instruction_ready`. Future turns are owned
-by the laptop. All four actions below require the run id and current
-`expected_control_epoch`:
+`set_route` requires a supported map, legal directed route, matching start and
+destination, `position_confirmed: true`, and current `expected_control_epoch`.
+The app verifies sole wheel ownership, sets the route, then sends `continue`
+with the same epoch. An intervening Stop invalidates Start.
 
-- `junction_instruction`: `value` is left/right/straight, `approach` is the
-  current directed lane and `expected_route_index` identifies the red stop.
-  The node independently validates the exit and dwell, appends one route edge,
-  then uses the existing crossing controller. Its accepted id is echoed in
-  `live_session.instruction_id`. Completion uses the existing
-  `junction_last_result` outcome/turn/route_index and the updated approach.
-- `pause`: optional finite numeric `seconds` in `(0, 3600]`; queues a pause
-  until a confirmed straight. Omitting seconds gives a 30-second Continue limit.
-  This advances the control epoch so older requests cannot override it.
-- `resume`: resumes a pause or cancels a pending one; cannot bypass red-stop
-  instruction validation, faults, a dead session or a stale camera/connection.
-- `straight_profile`: `value` is slow/normal/fast. Changes apply on confirmed
-  straight roads only. Increases require current straight evidence.
+`stop` latches zero, advances the epoch and ends a live session. Delayed requests
+cannot undo it. Camera/heartbeat loss and faults also prevent unattended resume.
 
-Managed mode disables automatic red-stop departure and legacy `turn` and global
-speed-scale actions. Empty-queue red stops end after 30 seconds from arrival.
-`stop` still ends immediately and invalidates older epochs in every phase.
-The user-facing word **stop** is interpreted by the laptop as `pause`; explicit
-**stop the run**, **quit**, or the Stop button sends protocol `stop`.
-See [LIVE_CHAT.md](LIVE_CHAT.md) for queue replacement/append behavior.
+## Managed live chat
 
-## Legacy / map-only actions
+`set_route` carries `managed_session: true` and a unique `run_id`. Its initial
+route contains the two starting-lane junctions; the laptop owns future turns.
+Status advertises `live_session.version: 1`, `pause_mode: immediate`, run id,
+profile, pause state and red-stop deadline. Live actions require that run id and
+the current `expected_control_epoch`:
 
-Actions below retain their existing behavior outside managed mode:
-- stop: stop immediately. A stop during crossing faults the route.
-- continue: resume a manual pause. Never enables a debug launcher, clears a fault,
-  skips the stop dwell or bypasses missing calibration.
-- slow_down / speed_up: multiply the speed scale by .8 / 1.2.
-- speed_scale with numeric value: absolute scale within .25 to 1.5.
-- turn with value left/right/straight: change the next junction exit and reconnect
-  to the remaining route. Impossible exits and U-turns are rejected.
-- heartbeat with client_id: keep the controlling laptop connection live; does not change the last user acknowledgment.
-- set_route with route (junction list), position_confirmed: true: while stopped
-  in route mode, confirm placement on the directed road `route[0] -> route[1]`,
-  outside a junction and facing the second junction. Optional `map_id`,
-  `start_approach` and `destination_approach` fields must match the shared map
-  and route endpoints. This sets route progress and leaves a manual stop active
-  until continue.
+- `junction_instruction`: left/right/straight `value`, current `approach` and
+  `expected_route_index`. The robot validates exit, dwell and phase. Its accepted
+  id appears in `live_session.instruction_id`.
+- `pause`: optional numeric `seconds` in `(0, 3600]`. It publishes zero before
+  acknowledgment and advances the epoch. Without duration, Continue is required
+  within 30 seconds.
+- `resume`: resume a pause without bypassing red authorization or faults.
+- `straight_profile`: slow/normal/fast, applied on confirmed straight roads.
 
-The desktop sends expected_control_epoch with motion requests so a delayed model
-response cannot undo a later Stop. Turn requests additionally carry
-expected_route_index and expected_next_junction. Both are checked on the node.
+`junction_last_result` reports outcome, turn and index; `current_approach` gives
+the outgoing lane. Only matching completion advances the laptop position.
+An authorized unmarked crossing still has camera freshness and maneuver limits.
+Empty-queue red stops retain zero and allow 60 seconds for an instruction.
 
-## Route states
-awaiting_route -> following -> red_stop -> crossing -> reacquiring -> following.
-A final-junction stop becomes route_complete. A camera failure, manual stop
-inside a junction, unexpected second red line, or reacquisition timeout becomes
-fault. A fault requires physical placement confirmation and a route reset.
-
-The provisional outer loop is A-D-C-E-A. It has straight junction choices with
-curves between junctions. A right override at D gives A-D-B-C-E-A.
-Map details are in PROJECT_REQUIREMENTS.md.
-
-The lane-route launcher enables route mode but leaves junctions_calibrated false.
-It is not a fully calibrated road-running preset. After measuring the entry,
-turn and reacquisition behavior with the actual bot, supply the calibrated
-private ROS parameters and set junctions_calibrated true.
-Default settings remain a two-second stop, .5-second entry, 1.6-second turn
-(1 second for straight), .05 junction base speed and .025 wheel differential
-bias. Direction-specific private parameters now inherit those values so left,
-right and straight can be calibrated separately without changing this default.
-Speed reductions scale both wheels and slow the traversal timing.
-Reacquisition requires the original red line to have disappeared, both lane
-boundaries in the expected order, and bounded lane error for .3 seconds.
-None of this proves the correct physical exit without track testing.
-
-The intersection interior is expected to be unmarked. After an authorized
-red-line departure, missing yellow and white borders do not request zero:
-`crossing` and `reacquiring` continue the selected bounded maneuver. Once both
-outgoing right-lane borders are visible, visual centring takes over. The route
-index changes only after the stable .3-second confirmation. The maneuver faults
-at its deadline if the outgoing lane is never established. This exception does
-not apply during ordinary `following`, where lane loss still stops output.
-
-Status retains all existing fields and adds `junction_phase`, elapsed/progress
-values, remaining deadline, direction-specific settings, the last junction
-result, and red-line geometry. `red_line_visible` can be true before the
-proximity trigger; `red_stop` becomes true only after the configured line-bottom
-threshold is reached.
-
-## HTTP gateway
-command_gateway.py bridges GET /status and POST /command to those ROS topics.
-It requires fresh node status and waits for a matching command acknowledgment.
-A timeout reports an unknown outcome; the client does not retry movement blindly.
-Default listener: 127.0.0.1:8765. Set DUCK2_CONTROL_TOKEN to a shared random value
-and put the same value in the Windows client. A non-loopback listener requires
-a token. Browser-origin requests are rejected.
-
-To expose a Docker gateway to Windows, bind the host port to 127.0.0.1 only and
-run the gateway with _listen_host:=0.0.0.0 inside that container. The gateway must
-share ROS connectivity with the lane follower. Do not publish a robot-control
-port to the public internet.
-
-Camera loss stops the robot. The desktop sends a heartbeat every .5 seconds
-while polling status. Once a client takes control, losing its heartbeat for
-two seconds stops the robot and invalidates older motion requests. Reconnection
-does not resume motion: a fresh explicit Continue is required. An interruption
-inside a junction faults the route and requires placement confirmation.
-The lane-route and lane-chat launchers require a fresh desktop heartbeat before
-control. Unsupervised lane-follow mode can run without a desktop until a client
-takes control. Stop remains available to any connected operator.
-
-The combined lane-chat launcher starts the route node and HTTP gateway together.
-It requires DUCK2_CONTROL_TOKEN and coordinates Ctrl+C shutdown of both processes.
-It retains _junctions_calibrated:=false until physical calibration is supplied.
-The current camera recorder is available separately as lane-record.
-
-`lane-continuous` is the current route/live-chat launcher. It starts stopped and
-combines the physically tested lane, sharp-right and junction presets with the
-command and camera gateways. Obstacle detection and passing remain disabled.
-The desktop must maintain its heartbeat and confirms a directed starting lane
-before sending `set_route` followed by `continue`. The gateway reports current
-wheel publishers; the desktop rejects Start unless the lane follower is the
-only publisher. Normal `car-interface` control must be suspended before this
-launcher and restored after it exits. See [USAGE.md](USAGE.md) for the sequence.
-
-## Read-only camera service
-
-`camera_gateway.py` subscribes to the existing compressed-camera topic and
-serves `normal`, `mask` and `overlay` PPM images through `GET /camera?view=`.
-It imports the lane follower's exact detector method, owns no ROS publisher and
-has no command endpoint. `GET /health` returns frame age and diagnostic text.
-The service defaults to loopback port 8766; the Windows app accepts only a
-loopback URL intended for an SSH tunnel. `lane-camera-view` starts this service
-alone and does not start a controller.
-
-When experimental obstacle detection is explicitly enabled, candidates trigger
-a persistent stop. The current continuous workflow disables it. The view must remain clear for
-.5 seconds before explicit Continue can release it. Detection is a provisional
-bright/colored-region heuristic, not recognition of every possible obstacle.
+Managed mode rejects legacy global speed/turn commands. The chatbot word `stop`
+means pause; `quit`, `stop the run` and STOP DUCK2 send terminal `stop`. Removed
+route options from an old client are rejected before route setup.

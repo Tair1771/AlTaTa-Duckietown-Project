@@ -55,9 +55,7 @@ switches to bounded junction manoeuvres when lane borders disappear. A directed
 A* planner calculates the shortest legal route between red-line approaches.
 The Windows application combines route selection, live camera diagnostics,
 status reporting, a working local live chatbot, and a direct stop control. The software was matched to the
-robot's installed ROS Noetic environment and evaluated with native tests,
-network-isolated ROS integration, stationary live checks, wheel diagnostics,
-and supervised track trials. Straight driving, a left curve-to-straight
+robot's installed ROS Noetic environment. Straight driving, a left curve-to-straight
 transition, a sharp right road bend, and individual straight, left, and right
 junction traversals were demonstrated. The chatbot provides immediate timed pauses, straight-road speed profiles and
 validated junction instructions. Its command rules run locally without model
@@ -66,7 +64,7 @@ training or a cloud service.
 \section{Introduction}
 
 Duckietown provides a compact autonomous-driving platform in which perception,
-control, distributed software, and physical testing can be studied together
+control and distributed software can be studied together
 \cite{paull2017duckietown}. The objective of this project was to make one robot,
 \emph{duck2}, follow the right lane and reach a selected red-line destination on
 a known course. The solution had to operate with the camera and wheel interfaces
@@ -246,8 +244,7 @@ startup repeatable after laptop or robot reboots.
 \subsection{Implementation and command flow}
 
 The live chatbot is integrated into the companion's camera/status panel. The
-normal application enables it by default, without a test-scenario launcher or
-an assumption that every starting road is straight. The
+normal application enables it by default. The
 operator types a message and presses Send or Enter; the input is not populated
 with a scripted demonstration. \code{live\_chat.py} normalises text, recognises
 an allowed intent and applies it to the current session. The UI reports actual
@@ -312,24 +309,16 @@ prevents automatic resumption. Timed requests accept positive durations up to
 \subsection{How the chatbot was developed}
 
 The chatbot uses a hand-written, deterministic command grammar. It was
-developed by specifying intents, writing phrase-recognition rules and checking
-examples against parser, session, UI and controller tests. It has no trained
+developed by specifying intents and writing phrase-recognition rules for the
+supported messages and current route state. It has no trained
 neural network, fitted weights, fine-tuning dataset or online learning stage.
-``Training'' in this project therefore means refining and verifying the command
-rules with examples, not machine-learning training.
+Command rules were refined with examples rather than machine-learning training.
 
 Text processing tolerates capitalisation, common punctuation and supported
 polite phrasing. Explicit route state supplies context for ``after that'',
 relative speed changes and the next junction. Unsupported wording and
 ambiguous requests produce clarification; arbitrary spelling mistakes are not
-guessed. No API key or downloaded language model is needed. Historical model
-experiments are separate from this working implementation.
-
-Duckietown supplies the ROS runtime and development scaffolding. Its official
-template catalogue describes ROS, core and other project templates
-\cite{templates}; the current command interpreter and live-session policy are
-project application code. The inspected runtime records do not identify a
-preinstalled chatbot service.
+guessed. No API key or downloaded language model is needed.
 
 \section{Safety Supervision}
 
@@ -343,132 +332,43 @@ driver emergency stop and ends the temporary controller process group.
 
 Cleanup waits for temporary publishers to exit and confirms zero wheel
 feedback. Restoration of normal robot control is a deliberate step after the
-project session ends; it is not an automatic app reconnection action. This was especially
-important during supervised tuning, where each physical trial used a bounded
-session and ended before the next adjustment.
-
-\section{Verification}
-
-\subsection{Offline and integration checks}
-
-Native checks cover Python syntax, documentation links, Windows launchers,
-directed A* routes, UI behaviour, command recognition, session identity,
-deduplication, immediate pause/resume and turn delivery. The live-navigation
-tests exercise the actual controller with mocked ROS, including profile
-isolation, red-stop waiting and Stop priority. These are software checks rather
-than evidence of road containment.
-
-The release review completed 562 native tests: 559 passed and three were
-skipped for platform-specific conditions. Syntax, documentation links and
-launcher targets passed for 80 Python sources. Network-isolated HTTP/ROS checks
-verified all three camera views, each speed profile, immediate pause output,
-and final-red stopping. A requested seven-second pause measured 7.093 seconds
-between zero and resumed synthetic wheel requests. The normal companion flow
-also passed map-queue loading, a straight override, the next red-line prompt,
-a subsequent left instruction, and terminal Stop. These checks used synthetic
-images and no robot connection; they establish command integration rather than
-physical route accuracy.
-The broader isolated ROS suite also passed, covering route progression, red
-dwell, camera and heartbeat loss, pause/resume, and explicit Stop.
-
-\subsection{Robot and track results}
-
-Authenticated Windows SSH, ROS master access, message fingerprints, containers,
-camera decoding, wheel topics, both encoders, IMU, and the front range sensor
-were verified on duck2. Stationary checks decoded normal, mask and overlay views and sampled timestamp
-age. Frame spacing and frame age were recorded as distinct quantities.
-
-Table~\ref{tab:physical} separates physical observation from controller evidence.
-
-\begin{table}[h]
-\centering
-\caption{Historical user-accepted supervised results; not a full-route certificate.}
-\label{tab:physical}
-\footnotesize
-\begin{tabularx}{\columnwidth}{@{}p{0.25\columnwidth}X@{}}
-\toprule
-Scenario & Result \\
-\midrule
-Straight lane & Near-perfect eight-second run; prompt stop. The detailed recording of one accepted run was lost; its summary was retained. \\
-Left curve to straight & Stayed contained through the curve, corrected on the straight, and stopped centred in the accepted trial. \\
-Sharp right road bend & Visually accepted turn using the bounded pivot; zero feedback and normal ownership restored. \\
-Straight junction & Straight approach, red stop and dwell, crossing, smooth outgoing centring, and no boundary crossing in the accepted trial. \\
-Left junction & User-observed smooth, correctly directed crossing and outgoing-lane entry; accepted without requested changes. \\
-Right junction & Accepted as passable: no boundary crossing, with a visible leftward heading remaining after entry. \\
-\bottomrule
-\end{tabularx}
-\end{table}
-
-The operator also reported the straight-path live-chat three-second pause
-check successful. Subsequent combined runs exercised the seven-second pause
-and a straight override at the first red line. A battery-interrupted attempt
-remains incomplete. In the latest attempt on 10 September 2026, the operator
-reported insufficient curve following followed by a stop. Consequently,
-complete-route physical validation remains \emph{incomplete}, despite accepted
-component trials and verified command delivery.
-
-Implemented chatbot functionality and accepted individual manoeuvres do not
-establish identical behaviour across a complete route under changing lighting,
-battery state and starting pose. Physical observations remain separate from
-controller acknowledgments and encoder evidence.
+project session ends; it is not an automatic app reconnection action.
 
 \balance
-\section{Discussion}
-
-The most significant engineering issue was that image geometry, wheel commands,
-and physical motion are related but not interchangeable. Earlier controllers
-averaged boundary points from different image depths, causing apparent centring
-to include a heading error. Row-matched geometry separated these effects. The
-minimum-PWM mapping also meant that small command differences produced nearly
-equal wheel rotation. Stronger, direction-specific profiles were therefore used
-only where physical trials supported them.
-
-The state-machine design resolved a second limitation: lane loss can indicate
-either a fault on a marked road or normal geometry inside an intersection.
-Allowing missing borders globally would weaken containment; stopping on every
-missing border would prevent crossings. Phase-dependent interpretation preserves
-normal lane-loss stopping while allowing a selected manoeuvre to continue until
-the outgoing corridor is established or its deadline expires.
+\section{Operational Limitations}
 
 The software remains map-relative rather than globally localised. The operator
 must select the actual starting approach. Physically relocating the robot
 requires a new session rather than relying on its previous reported position.
 The normal application uses the selected map route as its initial queue and
-permits live overrides at subsequent red stops. Optional scenarios limit a run
-to a pause, a crossing, or a configured final red line. These limits do not
-apply to the ordinary companion. The integrated software flow is implemented;
-the latest curve failure still requires physical follow-up.
+permits live overrides at subsequent red stops. Individual maneuvers have been
+demonstrated, but full-route reliability remains incomplete: insufficient curve
+following and heading errors can still interrupt navigation. Implemented command
+delivery does not establish reliable containment under every physical condition.
 
 \section{Reproducible Operation}
 
-Windows OpenSSH is the verified connection path. A protected key is installed
-once and unlocked when needed; strict host verification is retained as hotspot
-addresses change. After boot, the connection-check shortcut verifies reachability
-and runtime ownership. The driving-preparation shortcut stages the current
-source, establishes exclusive project control and leaves the controller stopped
-awaiting a route. Opening the companion then connects the map, camera and chat.
-Only the operator's confirmed Start begins the session.
+Windows OpenSSH uses a protected key and strict host verification. After boot,
+run the connection check, then \code{tools/Start-Duck2-DrivingMode.cmd} while
+stationary. Preparation stages current source, establishes exclusive wheel
+ownership and leaves the controller stopped. Open
+\code{laptop/Start-Duck2Companion.cmd}, connect, select the actual starting lane
+and destination, confirm placement and press Start. The operator types each
+chat message; the app does not prefill instructions. Stop ends the run.
 
-Run \code{tools/Start-Duck2-DrivingMode.cmd} while stationary, then
-\code{laptop/Start-Duck2Companion.cmd}. Select the real directed start and a
-red-line destination, connect, confirm placement and press Start. The message
-box is empty; the operator types every pause and direction message. Camera-only mode
-uses a separate driving-disabled backend. Docker Desktop is required for local
-ROS builds and isolated integration tests, but not for this source-mounted
-robot session. Repository startup, usage and live-chat guides document the
-exact entry points, dependencies, recovery procedure and supported grammar.
+Source changes require a newly prepared container and reopened app. Camera-only
+mode uses a driving-disabled backend. Docker Desktop is needed for optional
+local image builds, not source-mounted operation. Repository guides provide
+installation, shutdown and connection-recovery instructions.
 
 \section{Conclusion}
 
-The project integrates camera perception, closed-loop lane steering, red-line
-stops, unmarked junction traversal, directed A* planning and a working live
-chatbot on the installed Duckietown ROS platform. The operator can pause for a
-specified duration, select a straight-road profile and revise future junction
-choices through validated text commands. Explicit session state and acknowledgments
-connect those commands to the robot without placing language interpretation in
-the wheel-control loop. The recorded results establish implemented software and
-accepted component trials while retaining the incomplete status of the latest
-combined physical attempt.
+The project combines camera perception, lane steering, red stops, junction
+traversal, directed A* planning and local live chat. Validated text commands
+pause the robot, select straight-road speed profiles and revise future junction
+choices. Language interpretation remains outside the wheel-control loop.
+The implemented software and demonstrated component maneuvers remain subject
+to the complete-route perception and alignment limitations described above.
 
 \begin{thebibliography}{9}
 \bibitem{paull2017duckietown}
@@ -488,11 +388,6 @@ Cybernetics}, vol. 4, no. 2, pp. 100--107, 1968.
 \bibitem{opencv}
 G. Bradski, ``The OpenCV Library,'' \emph{Dr. Dobb's Journal of Software Tools},
 2000.
-
-\bibitem{templates}
-Duckietown, ``Project Templates,'' \emph{Developer Manual}, accessed
-10 September 2026.
-\href{https://docs.duckietown.com/ente/devmanual-software/beginner/dtproject/templates.html}{docs.duckietown.com, Project Templates}.
 
 \bibitem{projectrepo}
 T. Kezdekbayev, A. Mendez Li, and T. K. Erol, ``AlTaTa Duckietown Final,''

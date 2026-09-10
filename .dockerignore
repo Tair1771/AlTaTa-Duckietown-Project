@@ -1,12 +1,7 @@
-# Only application packaging inputs belong in the image build context.
-**
-!Dockerfile
-!packages/
-!packages/duckie_lane_follower/
-!packages/duckie_lane_follower/**
-!launchers/
-!launchers/**
-!config/
-!config/duck2.json
-**/__pycache__/
+**/__pycache__
 **/*.pyc
+.git
+.env
+.env.*
+.venv
+report

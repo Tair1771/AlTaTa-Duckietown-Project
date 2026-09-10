@@ -45,10 +45,6 @@ class LanePreview:
     junction_lane_geometry = LaneFollowerNode.junction_lane_geometry
     detect_lane_bgr = LaneFollowerNode.detect_lane_bgr
 
-    @staticmethod
-    def initial_straight_approach_active():
-        # The preview shares image detection, but has no driving session.
-        return False
 
     def __init__(self):
         self.roi_y0_fraction = float(rospy.get_param("~roi_y0_fraction", 0.50))

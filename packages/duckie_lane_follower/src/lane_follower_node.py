@@ -657,11 +657,6 @@ class LaneFollowerNode(DTROS):
         except (KeyError, TypeError, ValueError):
             return None
 
-    def initial_straight_approach_active(self):
-        """Explicitly confirmed straight start, only before the first junction."""
-        return (self.live.enabled and self.live.active and self.live.center_initial_straight
-                and self.route_index == 1 and self.navigation_state == "following")
-
     def straight_approach_wheels(self, left, right, steering):
         """Use row-matched lane geometry throughout an authorized approach."""
         if (not self.junctions_calibrated
@@ -671,13 +666,11 @@ class LaneFollowerNode(DTROS):
         # Ordinary lane following owns roads and curves between junctions.
         # Once a transverse red line becomes visible, latch the dedicated
         # approach controller so brief red-detector flicker cannot switch it.
-        initial_straight = self.initial_straight_approach_active()
         if not self._junction_approach_active:
-            if not self._red_line_visible and not initial_straight:
+            if not self._red_line_visible:
                 return left, right, steering
             self._junction_approach_active = True
-            # Do not seed a confirmed straight with centroid/trim steering.
-            self._junction_approach_steering = 0.0 if initial_straight else steering
+            self._junction_approach_steering = steering
             self._junction_approach_control_time = time.monotonic()
         geometry = self._junction_lane_geometry
         if not self.junction_geometry_steering_valid(geometry):
@@ -695,11 +688,6 @@ class LaneFollowerNode(DTROS):
         dt = min(max(now - self._junction_approach_control_time, 0.001), 0.1)
         change = self.max_steering_change * dt * 30.0
         self._junction_approach_control_time = now
-        if initial_straight:
-            # Smooth row-fit jitter with the existing frame-rate-aware filter;
-            # keep the same gains, steering cap, lane target and mean speed.
-            weight = 1.0 - (1.0 - self.alpha) ** (dt * 30.0)
-            desired = self._junction_approach_steering + weight * (desired - self._junction_approach_steering)
         limited = float(np.clip(
             desired,
             self._junction_approach_steering - change,
@@ -1449,11 +1437,6 @@ class LaneFollowerNode(DTROS):
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
         self._junction_lane_geometry = self.junction_lane_geometry(
             yellow_mask, white_mask, w)
-        if self.initial_straight_approach_active():
-            # Find existing dashes between fixed bands without inventing
-            # unseen near borders. This fallback is confined to the start leg.
-            self._junction_lane_geometry = self.straight_exit_geometry(
-                yellow_mask, white_mask, w, self._junction_lane_geometry)
         self._junction_white_geometry = None
         if getattr(self, "junction_white_boundary_guard", False):
             self._junction_white_geometry = self.right_white_boundary_geometry(white_mask, w)
@@ -2059,8 +2042,6 @@ class LaneFollowerNode(DTROS):
                 raise ValueError("Speed increases are available only on a confirmed straight section")
             self.live.profile = profile
         elif action == "junction_instruction":
-            if self.live.stop_after_junction and command.get("value") != "straight":
-                raise ValueError("This check permits one straight crossing only")
             if (self.navigation_state != "red_stop" or self.manual_stop
                     or self.live.paused_at is not None
                     or command.get("expected_route_index") != self.route_index):
@@ -2773,11 +2754,11 @@ class LaneFollowerNode(DTROS):
                         raise ValueError("managed_session must be boolean")
                     new_live = LiveSession()
                     if managed:
-                        new_live.start(command.get("run_id"), command.get("stop_at_next_red", False),
-                                       command.get("finish_approach"),
-                                       command.get("stop_after_junction", False),
-                                       command.get("finish_after_junction_red", False),
-                                       command.get("center_initial_straight", False))
+                        if any(key in command for key in (
+                                "stop_at_next_red", "finish_approach", "stop_after_junction",
+                                "finish_after_junction_red", "center_initial_straight")):
+                            raise ValueError("Unsupported route options; reopen the updated companion")
+                        new_live.start(command.get("run_id"))
                     self.live = new_live
                     self.speed_scale = 1.0
                     self.route, self.route_index = route, 1
@@ -3496,12 +3477,6 @@ class LaneFollowerNode(DTROS):
                         if not road_tracking:
                             self.filtered_error = self.prev_steering = 0.0
                         self._junction_approach_steering = 0.0
-                        if self.live.enabled and self.live.stop_after_junction:
-                            # Stop in the same control tick as confirmed lane
-                            # reacquisition, independently of laptop polling.
-                            self.live_tick(now)
-                            self.publish_wheels(0.0, 0.0)
-                            return 0.0, 0.0, 0.0
                         if road_handoff:
                             self._crossing_started = self._reacquire_started = None
                             self._crossing_updated = None

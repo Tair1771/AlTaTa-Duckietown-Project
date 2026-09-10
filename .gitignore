@@ -1,24 +1,17 @@
-# Python and test output
 __pycache__/
 *.py[cod]
-.pytest_cache/
-
-# Catkin and Docker development output
 build/
 devel/
 logs/
-
-# Local captures and credentials
-captures/
-.env
 *.log
 .venv/
 .runtime/
+.env
 .env.*
 *.pem
 *.key
 id_ed25519*
 id_rsa*
 duck2_ed25519*
-bench-checks/
+captures/
 connection-checks/

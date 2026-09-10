@@ -195,7 +195,7 @@ def run_check(host, user, mode, target, save):
     for issue in issues:
         print("NOT READY: " + issue)
     if issues:
-        print("No services were restarted. Resolve ownership before driving; isolated tests can still run.")
+        print("No services were restarted. Resolve controller ownership before driving.")
     return 3 if issues else 0
 
 

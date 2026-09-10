@@ -1,2 +1,2 @@
-# Optional for camera resizing; required for the stationary camera validation tool.
+# Camera rendering and resizing in the companion.
 Pillow>=10,<13

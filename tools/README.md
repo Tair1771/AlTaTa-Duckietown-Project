@@ -1,25 +1,16 @@
-# Tools
+# Setup and operation tools
 
-Run Windows connection tools from the repository root with Windows Python.
-Current commands and troubleshooting: [STARTUP](../docs/STARTUP.md).
+Run from Windows PowerShell in the repository root. See [STARTUP](../docs/STARTUP.md).
 
-| Files | Purpose |
+| Entry | Purpose |
 | --- | --- |
-| `inspect_robot_setup.py`, `Start-Duck2-Check.cmd` | Read-only SSH, ROS and ownership metadata |
-| `setup_duck2_ssh.ps1` | One-time protected key/alias setup |
-| `connect_companion.py`, `Start-Duck2-AppConnection.cmd` | Stationary preview and tunnel |
-| `prepare_companion_driving.py`, `arm_driver_stopped.py`, `Start-Duck2-DrivingMode.cmd` | Stopped physical-controller preparation and verified driver arming |
-| `run_duck2_ground_test.py`, `bounded_ground_supervisor.py`, `Start-Duck2-GroundTest.*` | Explicitly authorized bounded physical tests |
-| `analyse_wheel_evidence.py` | Offline wheel/encoder log analysis |
-| `isolated_bench_check.py` | Disposable network-none tests locally/onboard |
-| `interactive_bench.py`, `bench_scene.py`, `bench_rpc.py` | Isolated onboard simulation and allowlisted stdio bridge |
-| `exercise_interactive_bench.py` | Actual app callback checklist against simulation |
-| `exercise_map_demo.py` | Map-only multi-junction/destination/reconnect app rehearsal against simulation |
-| `verify_continuous_watchdog_ros.py` | Internal production-launcher fault checks; use the isolated runner's `--production-watchdog` option |
-| `check_stationary_camera.py` | Preview decode/timestamp checks; no physical wheel commands |
-| `build_local.py` | Pinned local AMD64/ARM64 build |
-| `check_project.py` | Offline source/link/launcher audit and native tests |
+| `setup_duck2_ssh.ps1` | One-time protected key and strict SSH alias |
+| `Start-Duck2-Check.cmd` | Read-only SSH, ROS and ownership checks |
+| `Start-Duck2-DrivingMode.cmd` | Prepare stopped controller, camera and tunnel |
+| `Start-Duck2-AppConnection.cmd` | Stationary camera-only connection |
+| `build_local.py` | Optional local pinned Docker image build |
 
-`bench_scene.py` and `bench_rpc.py` are internal container helpers. Do not run
-them on the robot host or against its real ROS master. Use their isolated runner.
-Evidence belongs under local application data, not inside this folder.
+The shortcuts use `inspect_robot_setup.py`, `prepare_companion_driving.py` and
+`connect_companion.py`. Driving preparation also requires `arm_driver_stopped.py`:
+it verifies zero output and sole ownership before releasing a driver stop latch.
+Keep these dependencies together.

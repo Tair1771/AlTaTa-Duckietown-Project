@@ -1,4 +1,0 @@
--r requirements-desktop.txt
-# Native Windows regression tests; robot runtime versions remain pinned separately.
-numpy>=1.26,<3
-opencv-python>=4.8,<5
